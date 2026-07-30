@@ -83,7 +83,7 @@
 			}
 		}}
 		placeholder={isOpen ? "Поиск..." : "Нажмите для выбора..."}
-		onfocus={() => { if (!disabled) { isOpen = true; searchQuery = displayValue; } }}
+		onfocus={() => { if (!disabled) { isOpen = true; } }}
 		{disabled}
 		class="lookup-input"
 		class:active-focus={isOpen}

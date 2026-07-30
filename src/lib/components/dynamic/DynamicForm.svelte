@@ -4,13 +4,9 @@
 	import { printerService } from '$lib/services/printer';
 	import { numberService } from '$lib/services/numbers';
 	import { isReadOnly } from '$lib/table-types';
+	import { fieldRegistry } from '$lib/fields';
 	import Toolbar from './Toolbar.svelte';
 	import TabularSection from './TabularSection.svelte';
-	import StringField from '$lib/fields/StringField.svelte';
-	import NumberField from '$lib/fields/NumberField.svelte';
-	import BooleanField from '$lib/fields/BooleanField.svelte';
-	import DateField from '$lib/fields/DateField.svelte';
-	import LinkField from '$lib/fields/LinkField.svelte';
 
 	let { tableId, recordId, tabId = '' } = $props();
 
@@ -21,15 +17,70 @@
 	let tableMeta = $state<LocalTable | null>(null);
 
 	let objectSubTables = $state<LocalTable[]>([]);
-	let lines = $state<LocalLine[]>([]);
+	let activeSubTabIndex = $state<number>(0);
 	let loading = $state(true);
 
 	let tableType = $derived(tableMeta?.type ?? 'document');
 	let tableConfig = $derived(tableMeta?.config ?? {});
 	let readOnly = $derived(isReadOnly(tableType, recordStatus, tableConfig));
 
-	let totalAmount = $derived(lines.reduce((sum, line) => sum + (parseFloat(line.data?.amount) || 0), 0));
-	let totalQuantity = $derived(lines.reduce((sum, line) => sum + (parseFloat(line.data?.quantity) || 0), 0));
+	let activeSubTable = $derived(objectSubTables[activeSubTabIndex]);
+
+	// ---- sub-table lines ----
+	// activeSubTableLines is the single $state array for the currently active sub-table.
+	// TabularSection binds to it via `bind:lines`, so all mutations (push, splice, modify)
+	// are tracked by Svelte 5's reactive proxy.
+	let activeSubTableLines = $state<LocalLine[]>([]);
+
+	// Plain backup copies for ALL sub-tables (used only to persist data across tab switches and for saving)
+	let subTableBackup: Record<string, LocalLine[]> = {};
+
+	function backupActiveLines() {
+		if (activeSubTable) {
+			subTableBackup[activeSubTable.id] = activeSubTableLines.map(l => ({
+				...l,
+				data: { ...l.data }
+			}));
+		}
+	}
+
+	function restoreLinesToActive(forceEmpty = false) {
+		const sub = activeSubTable;
+		if (!sub) { activeSubTableLines = []; return; }
+		const saved = subTableBackup[sub.id];
+		if (saved && saved.length > 0 && !forceEmpty) {
+			activeSubTableLines = saved.map(l => ({ ...l, data: { ...l.data } }));
+		} else {
+			activeSubTableLines = [];
+		}
+	}
+
+	function switchSubTab(index: number) {
+		backupActiveLines();
+		activeSubTabIndex = index;
+		restoreLinesToActive();
+	}
+
+	// Footer totals
+	let allLines = $state<LocalLine[]>([]);
+	let totalAmount = $state(0);
+	let totalQuantity = $state(0);
+
+	$effect(() => {
+		const _len = activeSubTableLines.length;
+		const _tab = activeSubTabIndex;
+		const flat: LocalLine[] = [];
+		for (const [id, lines] of Object.entries(subTableBackup)) {
+			if (id === activeSubTable?.id) {
+				flat.push(...activeSubTableLines);
+			} else {
+				flat.push(...lines);
+			}
+		}
+		allLines = flat;
+		totalAmount = flat.reduce((sum, line) => sum + (parseFloat(line.data?.amount) || 0), 0);
+		totalQuantity = flat.reduce((sum, line) => sum + (parseFloat(line.data?.quantity) || 0), 0);
+	});
 
 	async function loadForm() {
 		loading = true;
@@ -39,23 +90,34 @@
 
 		const allTables = await db.meta_tables.toArray();
 		objectSubTables = allTables.filter(t => t.parent_table_id === tableId);
-
 		columns = await db.meta_columns.where('table_id').equals(tableId).sortBy('sort_order');
+
+		const allLineRows = await db.data_lines.where('record_id').equals(recordId).toArray();
+		const newBackup: Record<string, LocalLine[]> = {};
+		for (const sub of objectSubTables) {
+			newBackup[sub.id] = allLineRows.filter(l => l.table_id === sub.id);
+		}
+		subTableBackup = newBackup;
 
 		const existRecord = await db.data_records.get(recordId);
 		if (existRecord) {
 			recordData = { ...existRecord.data };
 			recordStatus = existRecord.status;
-			lines = await db.data_lines.where('record_id').equals(recordId).toArray();
 		} else {
 			const prefix = tableTitle.includes('Накладная') || tableTitle.includes('Реализация') ? 'РН-' : 'СП-';
 			const nextNum = await numberService.getNextNumber(tableId, prefix);
 			recordData = { number: nextNum, date: new Date().toISOString().split('T')[0] };
 			recordStatus = 'draft';
-			lines = [];
 		}
 
-		columns.forEach(col => { if (recordData[col.name] === undefined) recordData[col.name] = ''; });
+		columns.forEach(col => {
+			if (recordData[col.name] === undefined) {
+				recordData[col.name] = col.type === 'boolean' ? false : '';
+			}
+		});
+
+		// Populate activeSubTableLines from backup
+		restoreLinesToActive();
 
 		loading = false;
 	}
@@ -63,8 +125,24 @@
 	function markAsDirty() { workspace.setDirty(tabId, true); }
 
 	async function saveToDb(targetStatus: string) {
-		const cleanData = $state.snapshot(recordData);
-		const cleanLines = $state.snapshot(lines);
+		backupActiveLines();
+
+		const cleanData: Record<string, any> = {};
+		for (const key of Object.keys(recordData)) {
+			cleanData[key] = recordData[key];
+		}
+
+		const cleanLines: Array<{ subTableId: string; lines: Array<{ id: string; data: Record<string, any>; sort_order: number }> }> = [];
+		for (const [subTableId, lines] of Object.entries(subTableBackup)) {
+			cleanLines.push({
+				subTableId,
+				lines: lines.map(line => ({
+					id: line.id,
+					data: Object.fromEntries(Object.entries(line.data)),
+					sort_order: line.sort_order || 0
+				}))
+			});
+		}
 
 		await db.transaction('rw', [db.data_records, db.data_lines], async () => {
 			await db.data_records.put({
@@ -74,8 +152,10 @@
 			});
 
 			await db.data_lines.where('record_id').equals(recordId).delete();
-			for (const line of cleanLines) {
-				await db.data_lines.put({ id: line.id, record_id: recordId, table_id: tableId, data: line.data, sort_order: line.sort_order || 0 });
+			for (const { subTableId, lines } of cleanLines) {
+				for (const line of lines) {
+					await db.data_lines.put({ id: line.id, record_id: recordId, table_id: subTableId, data: line.data, sort_order: line.sort_order });
+				}
 			}
 		});
 
@@ -84,7 +164,7 @@
 		if (targetStatus !== recordStatus) recordStatus = targetStatus as any;
 	}
 
-	async function handleAction(actionId: string, payload?: string) {
+	async function handleAction(actionId: string) {
 		switch (actionId) {
 			case 'save': await saveToDb('draft'); break;
 			case 'post': recordStatus = 'posted'; await saveToDb('posted'); break;
@@ -98,8 +178,23 @@
 
 	async function handleCopy() {
 		const newRecordId = crypto.randomUUID();
-		const cleanData = $state.snapshot(recordData);
-		const cleanLines = $state.snapshot(lines);
+		backupActiveLines();
+
+		const cleanData: Record<string, any> = {};
+		for (const key of Object.keys(recordData)) {
+			cleanData[key] = recordData[key];
+		}
+		const cleanLines: Array<{ subTableId: string; lines: Array<{ id: string; data: Record<string, any>; sort_order: number }> }> = [];
+		for (const [subTableId, lines] of Object.entries(subTableBackup)) {
+			cleanLines.push({
+				subTableId,
+				lines: lines.map(line => ({
+					id: line.id,
+					data: Object.fromEntries(Object.entries(line.data)),
+					sort_order: line.sort_order || 0
+				}))
+			});
+		}
 
 		const prefix = tableTitle.includes('Накладная') || tableTitle.includes('Реализация') ? 'РН-' : 'СП-';
 		const nextFreeNumber = await numberService.getNextNumber(tableId, prefix);
@@ -107,8 +202,10 @@
 
 		await db.transaction('rw', [db.data_records, db.data_lines], async () => {
 			await db.data_records.put({ id: newRecordId, table_id: tableId, status: 'draft', is_folder: false, parent_id: null, data: newRecordData, is_dirty: 1, updated_at: new Date().toISOString() });
-			for (const line of cleanLines) {
-				await db.data_lines.put({ id: crypto.randomUUID(), record_id: newRecordId, table_id: tableId, data: { ...line.data }, sort_order: line.sort_order || 0 });
+			for (const { subTableId, lines } of cleanLines) {
+				for (const line of lines) {
+					await db.data_lines.put({ id: crypto.randomUUID(), record_id: newRecordId, table_id: subTableId, data: line.data, sort_order: line.sort_order });
+				}
 			}
 		});
 
@@ -127,18 +224,11 @@
 		<div class="form-body">
 			<div class="form-grid">
 				{#each columns as col}
+					{@const FC = fieldRegistry[col.type]?.FormField}
 					<div class="form-field">
 						<label for={col.id}>{col.title}</label>
-						{#if col.type === 'boolean'}
-							<BooleanField bind:value={recordData[col.name]} disabled={readOnly} onChange={markAsDirty} />
-						{:else if col.type === 'link'}
-							<LinkField bind:value={recordData[col.name]} disabled={readOnly} relatedTableId={col.related_table_id ?? ''} onChange={markAsDirty} />
-						{:else if col.type === 'date'}
-							<DateField bind:value={recordData[col.name]} disabled={readOnly} onChange={markAsDirty} />
-						{:else if col.type === 'number'}
-							<NumberField bind:value={recordData[col.name]} disabled={readOnly} onChange={markAsDirty} />
-						{:else}
-							<StringField bind:value={recordData[col.name]} disabled={readOnly} onChange={markAsDirty} />
+						{#if FC}
+							<FC bind:value={recordData[col.name]} disabled={readOnly} onChange={markAsDirty} relatedTableId={col.related_table_id ?? ''} />
 						{/if}
 					</div>
 				{/each}
@@ -147,22 +237,28 @@
 			{#if objectSubTables.length > 0}
 				<div class="sub-tabs-wrapper">
 					<div class="sub-tabs-header">
-						{#each objectSubTables as subTab}
-							<button class="sub-tab-btn active">📦 {subTab.title}</button>
+						{#each objectSubTables as subTab, i}
+							<button
+								class="sub-tab-btn"
+								class:active={activeSubTabIndex === i}
+								onclick={() => switchSubTab(i)}
+							>
+								📦 {subTab.title}
+							</button>
 						{/each}
 					</div>
-					<div class="sub-tab-content">
-						{#each objectSubTables as subTab}
-							<TabularSection bind:lines={lines} onChange={markAsDirty} readOnly={readOnly} {tableId} />
-						{/each}
-					</div>
+					{#if activeSubTable}
+						<div class="sub-tab-content">
+							<TabularSection bind:lines={activeSubTableLines} onChange={markAsDirty} readOnly={readOnly} tableId={activeSubTable.id} />
+						</div>
+					{/if}
 				</div>
 			{/if}
 		</div>
 
 		{#if objectSubTables.length > 0}
 			<div class="form-footer-summary">
-				<div class="summary-item">Всего строк: <strong>{lines.length}</strong></div>
+				<div class="summary-item">Всего строк: <strong>{allLines.length}</strong></div>
 				<div class="summary-item">Всего количество: <strong>{totalQuantity}</strong></div>
 				<div class="summary-item total-price">Итого сумма: <span>{totalAmount}</span> руб.</div>
 			</div>

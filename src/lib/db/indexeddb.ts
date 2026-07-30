@@ -66,6 +66,7 @@ class ErpIndexedDB extends Dexie {
     meta_columns!: Table<LocalColumn, string>;
     data_records!: Table<LocalRecord, string>;
     data_lines!: Table<LocalLine, string>;
+    print_forms!: Table<PrintForm, string>;
 
     constructor() {
         super('ErpOfflineCache');

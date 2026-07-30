@@ -90,11 +90,7 @@
 	async function saveConfig() {
 		if (!selectedTableMeta) return;
 		configSaving = true;
-		const { error } = await supabase
-			.from('meta_tables')
-			.update({ config: editConfig })
-			.eq('id', selectedTableMeta.id);
-		if (error) alert(`Ошибка сохранения: ${error.message}`);
+		await metadata.updateTableConfig(selectedTableMeta.id, editConfig);
 		configSaving = false;
 		await syncService.runFullSync();
 	}
@@ -200,8 +196,8 @@
 
 	async function handleDeleteSubTable(subId: string) {
 		if (!confirm(`Удалить табличную часть "${subTables.find(s => s.id === subId)?.title}"? Это также удалит все её реквизиты.`)) return;
-		await supabase.from('meta_columns').delete().eq('table_id', subId);
-		await supabase.from('meta_tables').delete().eq('id', subId);
+		await metadata.deleteColumnsByTable(subId);
+		await metadata.deleteTable(subId);
 		await syncService.runFullSync();
 		await loadTableData();
 	}
@@ -275,7 +271,7 @@
 
 		<div class="field-group">
 			<label for="cfg-main-select">Выберите Справочник или Документ для настройки</label>
-			<select id="cfg-main-select" bind:value={selectedTableId} onchange={loadTableData}>
+			<select id="cfg-main-select" bind:value={selectedTableId}>
 				<option value="">-- Выберите объект --</option>
 				{#each allTables.filter(t => t.type !== 'template') as t}
 					<option value={t.id}>{t.title} [{t.name ?? t.id.slice(0, 8)}]</option>

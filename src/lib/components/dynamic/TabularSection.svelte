@@ -1,13 +1,23 @@
 <script lang="ts">
 	import LookupInput from '../ui/LookupInput.svelte';
-	import type { LocalLine } from '$lib/db/indexeddb';
+	import { db, type LocalLine, type LocalColumn } from '$lib/db/indexeddb';
 	let { lines = $bindable([]), onChange = null, readOnly = false, tableId = '' } = $props();
 	let selectedLineId = $state<string | null>(null);
+	let linkColumn = $state<LocalColumn | null>(null);
+	let relatedTableId = $derived(linkColumn?.related_table_id ?? tableId);
+
+	$effect(() => {
+		if (!tableId) return;
+		db.meta_columns.where('table_id').equals(tableId).toArray().then(cols => {
+			linkColumn = cols.find(c => c.type === 'link') ?? null;
+		});
+	});
 
 	function addLine() {
 		lines.push({
 			id: crypto.randomUUID(),
-			data: { product: '', quantity: 1, price: 0, amount: 0 }
+			data: { product: '', quantity: 1, price: 0, amount: 0 },
+			sort_order: lines.length
 		});
 		if (onChange) onChange();
 	}
@@ -32,19 +42,14 @@
 		if (onChange) onChange();
 	}
 	function handleProductSelect(line: LocalLine, productData: Record<string, any>) {
-		// Если в справочнике Номенклатура у товара есть цена, автоматически переносим её в документ
-		// (Для теста вы можете добавить цену в JSON товара, например {"price": 45000})
 		if (productData.price) {
 			line.data.price = parseFloat(productData.price) || 0;
 		}
-
-		// Пересчитываем сумму строки
 		calculateAmount(line);
 	}
 </script>
 
 <div class="tabular-section">
-	<!-- Командная панель табличной части -->
 	<div class="tabular-actions">
 		<button onclick={addLine} class="btn-add" disabled={readOnly}>➕ Добавить строку</button>
 		<button
@@ -82,7 +87,7 @@
 						<td>
 							<LookupInput
 								bind:value={line.data.product}
-								targetTableId={tableId}
+								targetTableId={relatedTableId}
 								disabled={readOnly}
 								onSelect={(productData) => handleProductSelect(line, productData)}
 							/>
@@ -129,7 +134,7 @@
 	}
 	.tabular-row.selected {
 		background-color: #fef08a !important;
-	} /* Желтое выделение строки */
+	}
 	.btn-remove {
 		margin-left: 4px;
 		color: #ef4444;

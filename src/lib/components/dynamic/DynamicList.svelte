@@ -131,7 +131,7 @@
 		const prefix = (tableMeta?.title?.includes('Накладная') || tableMeta?.title?.includes('Реализация')) ? 'РН-' : 'СП-';
 		const nextFreeNumber = await numberService.getNextNumber(tableId, prefix);
 
-		const newRecordData = { ...sourceRecord.data, number: nextFreeNumber, date: new Date().toISOString().split('T') };
+		const newRecordData = { ...sourceRecord.data, number: nextFreeNumber, date: new Date().toISOString().split('T')[0] };
 
 		await db.transaction('rw', [db.data_records, db.data_lines], async () => {
 			await db.data_records.put({

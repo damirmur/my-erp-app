@@ -22,7 +22,7 @@ export const printerService = {
             .first();
 
         // Базовый макет-заглушка на случай, если в БД нет шаблона
-        let templateHtml = defaultForm ? defaultForm.template_html : `
+        let templateHtml = defaultForm ? defaultForm.template : `
             <div style="font-family: sans-serif; padding: 20px;">
                 <h2>{{doc.title}} № {{doc.number}}</h2>
                 <p>Дата: {{doc.date}}</p>

@@ -27,8 +27,7 @@
 
 	let actions = $derived(getActions(tableTypeName, mode, tableConfig));
 
-	let currentStatusDef = $derived(getStatusDef(tableTypeName, status));
-</script>
+	let currentStatusDef = $derived(getStatusDef(tableTypeName, status));</script>
 
 {#if tableMeta}
 	<div class="toolbar">

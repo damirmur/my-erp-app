@@ -80,7 +80,9 @@ export const syncService = {
                             status: record.status,
                             data: record.data,
                             updated_at: record.updated_at,
-                            is_dirty: 0 // Данные пришли с сервера, они "чистые"
+                            is_dirty: 0, // Данные пришли с сервера, они "чистые"
+                            is_folder: record.is_folder ?? false,
+                            parent_id: record.parent_id ?? null
                         });
                     }
 
@@ -121,7 +123,9 @@ export const syncService = {
                         table_id: localRecord.table_id,
                         status: localRecord.status,
                         data: localRecord.data,
-                        updated_at: new Date().toISOString() // Сервер обновит метку времени
+                        updated_at: new Date().toISOString(), // Сервер обновит метку времени
+                        is_folder: localRecord.is_folder ?? false,
+                        parent_id: localRecord.parent_id ?? null
                     });
 
                 if (rError) throw rError;

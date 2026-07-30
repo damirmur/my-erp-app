@@ -65,7 +65,7 @@ my-erp-app/
 |-------|-----|--------|
 | `meta_tables` | `id`, `&name` (unique) | `title`, `type`, `parent_table_id`, `config?` (JSON) |
 | `meta_columns` | `id` | `table_id`, `name`, `title`, `type`, `related_table_id?`, `sort_order`, `is_visible` |
-| `data_records` | `id` | `table_id`, `status`, `data` (JSON), `number`, `date`, `parent_id`, `is_dirty`, `updated_at` |
+| `data_records` | `id` | `table_id`, `status`, `data` (JSON), `number`, `date`, `parent_id`, `is_folder`, `is_dirty`, `updated_at` |
 | `data_lines` | `id` | `record_id`, `table_id`, `data` (JSON), `sort_order` |
 | `print_forms` | `id` | `table_id`, `name`, `template`, `is_default` |
 
@@ -141,7 +141,7 @@ Runtime `ActionDef` uses function predicates: `show?: (status) => boolean`. DB s
 | date | `'date'` | Дата | `<input type="date">` | — |
 | link | `'link'` | Ссылка | LookupInput wrapper | LinkConfig (select target table) |
 
-**Note**: DynamicForm does NOT use the registry dynamically — it has a hardcoded `{#if}` chain over `col.type`. New field types require modifying DynamicForm.
+**Note**: DynamicForm resolves fields dynamically via `{@const FC = fieldRegistry[col.type]?.FormField}` — adding a new field type module to the registry is sufficient; no DynamicForm edits required.
 
 ---
 

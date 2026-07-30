@@ -53,6 +53,28 @@ class MetadataManager {
             await supabase.from('meta_columns').update(columnData).eq('id', colId);
         }
     }
+
+    async updateTableConfig(tableId: string, config: Record<string, any>): Promise<string | null> {
+        const { error } = await supabase
+            .from('meta_tables')
+            .update({ config })
+            .eq('id', tableId);
+        if (error) {
+            alert(`Ошибка сохранения настроек: ${error.message}`);
+            return null;
+        }
+        return tableId;
+    }
+
+    async deleteTable(tableId: string) {
+        const { error } = await supabase.from('meta_tables').delete().eq('id', tableId);
+        if (error) alert(`Ошибка удаления таблицы: ${error.message}`);
+    }
+
+    async deleteColumnsByTable(tableId: string) {
+        const { error } = await supabase.from('meta_columns').delete().eq('table_id', tableId);
+        if (error) alert(`Ошибка удаления колонок: ${error.message}`);
+    }
 }
 
 export const metadata = new MetadataManager();

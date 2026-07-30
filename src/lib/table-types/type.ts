@@ -1,0 +1,43 @@
+export interface StatusDef {
+    value: string;
+    label: string;
+    icon: string;
+    badgeClass: string;
+    isReadOnly: boolean;
+}
+
+export interface ActionDef {
+    id: string;
+    label: string;
+    icon: string;
+    type: 'list' | 'form';
+    variant?: 'primary' | 'success' | 'danger' | 'warning' | 'text-danger' | 'text-success';
+    show?: (status: string) => boolean;
+    disabled?: (status: string) => boolean;
+}
+
+export interface ActionDefDB {
+    id: string;
+    label: string;
+    icon: string;
+    type: 'list' | 'form';
+    variant?: 'primary' | 'success' | 'danger' | 'warning' | 'text-danger' | 'text-success';
+    showWhen?: string;
+    showWhenNot?: string;
+    disabledWhen?: string;
+}
+
+export interface TableTypeFeatures {
+    hierarchy: boolean;
+    copy: boolean;
+    print: boolean;
+    tabularSections: boolean;
+}
+
+export interface TableTypeModule {
+    type: string;
+    label: string;
+    statuses: StatusDef[];
+    features: TableTypeFeatures;
+    actions: ActionDef[];
+}

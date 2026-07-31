@@ -7,6 +7,7 @@
 	import { fieldRegistry } from '$lib/fields';
 	import Toolbar from './Toolbar.svelte';
 	import TabularSection from './TabularSection.svelte';
+	import PeriodsTable from './PeriodsTable.svelte';
 
 	let { tableId, recordId, tabId = '' } = $props();
 
@@ -23,6 +24,10 @@
 	let tableType = $derived(tableMeta?.type ?? 'document');
 	let tableConfig = $derived(tableMeta?.config ?? {});
 	let readOnly = $derived(isReadOnly(tableType, recordStatus, tableConfig));
+	let isConstant = $derived(tableType === 'constant');
+	let isPeriodic = $derived(tableConfig.periodic === true && isConstant);
+	let mainColName = $derived(columns[0]?.name ?? 'value');
+	let mainColType = $derived(columns[0]?.type ?? 'string');
 
 	let activeSubTable = $derived(objectSubTables[activeSubTabIndex]);
 
@@ -106,6 +111,9 @@
 		if (existRecord) {
 			recordData = { ...existRecord.data };
 			recordStatus = existRecord.status;
+		} else if (isConstant) {
+			recordData = { value: '' };
+			recordStatus = 'draft';
 		} else {
 			const prefix =
 				tableTitle.includes('Накладная') || tableTitle.includes('Реализация') ? 'РН-' : 'СП-';
@@ -123,8 +131,32 @@
 		// Populate activeSubTableLines from backup
 		restoreLinesToActive();
 
+		// Для периодической константы значение в шапке = значение последнего периода
+		if (isPeriodic) {
+			const latest = latestPeriodValue();
+			if (latest !== undefined) recordData[mainColName] = latest;
+		}
+
 		loading = false;
 	}
+
+	// Значение последнего периода (актуальное)
+	function latestPeriodValue(): any {
+		const lines = activeSubTableLines
+			.filter((l) => l.data?.period)
+			.map((l) => ({ period: new Date(l.data.period).getTime(), value: l.data.value }));
+		if (lines.length === 0) return undefined;
+		lines.sort((a, b) => b.period - a.period);
+		return lines[0].value;
+	}
+
+	// При изменении таблицы периодов обновляем значение в шапке
+	$effect(() => {
+		if (isPeriodic) {
+			const latest = latestPeriodValue();
+			if (latest !== undefined) recordData[mainColName] = latest;
+		}
+	});
 
 	function markAsDirty() {
 		workspace.setDirty(tabId, true);
@@ -180,7 +212,10 @@
 		});
 
 		workspace.setDirty(tabId, false);
-		workspace.updateTabTitle(tabId, `${tableTitle} №${recordData.number}`);
+		workspace.updateTabTitle(
+			tabId,
+			isConstant ? tableTitle : `${tableTitle} №${recordData.number}`
+		);
 		if (targetStatus !== recordStatus) recordStatus = targetStatus as any;
 	}
 
@@ -291,11 +326,16 @@
 				{#each columns as col}
 					{@const FC = fieldRegistry[col.type]?.FormField}
 					<div class="form-field">
-						<label for={col.id}>{col.title}</label>
+						<label for={col.id}>
+							{col.title}
+							{#if isPeriodic && col.name === mainColName}
+								<span class="field-note">(актуальное значение)</span>
+							{/if}
+						</label>
 						{#if FC}
 							<FC
 								bind:value={recordData[col.name]}
-								disabled={readOnly}
+								disabled={readOnly || (isPeriodic && col.name === mainColName)}
 								onChange={markAsDirty}
 								relatedTableId={col.related_table_id ?? ''}
 							/>
@@ -304,7 +344,7 @@
 				{/each}
 			</div>
 
-			{#if objectSubTables.length > 0}
+			{#if objectSubTables.length > 0 && (!isConstant || isPeriodic)}
 				<div class="sub-tabs-wrapper">
 					<div class="sub-tabs-header">
 						{#each objectSubTables as subTab, i}
@@ -319,19 +359,28 @@
 					</div>
 					{#if activeSubTable}
 						<div class="sub-tab-content">
-							<TabularSection
-								bind:lines={activeSubTableLines}
-								onChange={markAsDirty}
-								{readOnly}
-								tableId={activeSubTable.id}
-							/>
+							{#if isConstant}
+								<PeriodsTable
+									bind:lines={activeSubTableLines}
+									onChange={markAsDirty}
+									{readOnly}
+									valueType={mainColType}
+								/>
+							{:else}
+								<TabularSection
+									bind:lines={activeSubTableLines}
+									onChange={markAsDirty}
+									{readOnly}
+									tableId={activeSubTable.id}
+								/>
+							{/if}
 						</div>
 					{/if}
 				</div>
 			{/if}
 		</div>
 
-		{#if objectSubTables.length > 0}
+		{#if objectSubTables.length > 0 && !isConstant}
 			<div class="form-footer-summary">
 				<div class="summary-item">Всего строк: <strong>{allLines.length}</strong></div>
 				<div class="summary-item">Всего количество: <strong>{totalQuantity}</strong></div>
@@ -368,6 +417,12 @@
 		font-size: 0.8rem;
 		font-weight: 500;
 		color: #475569;
+	}
+	.field-note {
+		font-size: 0.7rem;
+		font-weight: 400;
+		color: #94a3b8;
+		margin-left: 4px;
 	}
 	.sub-tabs-wrapper {
 		margin-top: 1.5rem;

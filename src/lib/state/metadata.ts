@@ -37,23 +37,36 @@ class MetadataManager {
 		}
 
 		if (data && !parentTableId) {
-			// Базовые реквизиты создаем только для независимых объектов
-			await supabase.from('meta_columns').insert([
-				{
-					table_id: data.id,
-					name: 'number',
-					title: type === 'document' ? 'Номер' : 'Код',
-					type: 'string',
-					sort_order: 1
-				},
-				{
-					table_id: data.id,
-					name: 'name',
-					title: type === 'document' ? 'Содержание' : 'Наименование',
-					type: 'string',
-					sort_order: 2
-				}
-			]);
+			if (type === 'constant') {
+				// Константа: единственное поле value, тип меняется в конструкторе
+				await supabase.from('meta_columns').insert([
+					{
+						table_id: data.id,
+						name: 'value',
+						title: 'Значение',
+						type: 'string',
+						sort_order: 1
+					}
+				]);
+			} else {
+				// Базовые реквизиты создаем только для независимых объектов
+				await supabase.from('meta_columns').insert([
+					{
+						table_id: data.id,
+						name: 'number',
+						title: type === 'document' ? 'Номер' : 'Код',
+						type: 'string',
+						sort_order: 1
+					},
+					{
+						table_id: data.id,
+						name: 'name',
+						title: type === 'document' ? 'Содержание' : 'Наименование',
+						type: 'string',
+						sort_order: 2
+					}
+				]);
+			}
 		}
 		return data ? data.id : null;
 	}

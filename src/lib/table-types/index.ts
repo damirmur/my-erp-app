@@ -6,12 +6,18 @@ import { dynamicTypes } from './store';
 import directory from './directory';
 import document from './document';
 import template from './template';
+import constant from './constant';
 
 export type { TableTypeModule, StatusDef, ActionDef };
 export type { TableConfig };
 export { dynamicTypes };
 
-const builtinRegistry: Record<string, TableTypeModule> = { directory, document, template };
+const builtinRegistry: Record<string, TableTypeModule> = {
+	directory,
+	document,
+	template,
+	constant
+};
 const defaultType = document;
 
 export const tableTypeList = derived(dynamicTypes, ($dyn) => {
@@ -78,7 +84,8 @@ export function getEffectiveConfig(table: LocalTable): TableConfig {
 			tabularSections: c.features?.tabularSections ?? typeDef.features.tabularSections
 		},
 		hiddenActions: c.hiddenActions ?? [],
-		statusReadOnly: c.statusReadOnly ?? {}
+		statusReadOnly: c.statusReadOnly ?? {},
+		periodic: c.periodic ?? false
 	};
 }
 

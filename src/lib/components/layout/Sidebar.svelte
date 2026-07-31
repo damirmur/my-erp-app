@@ -10,6 +10,7 @@
 		directory: '📁 Справочники',
 		document: '📄 Документы',
 		register: '📊 Регистры',
+		constant: '🏷️ Константы',
 		system: '⚙️ Системные'
 	};
 
@@ -37,6 +38,7 @@
 			directory: [],
 			document: [],
 			register: [],
+			constant: [],
 			system: []
 		};
 		tables.forEach((table) => {

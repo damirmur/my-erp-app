@@ -61,7 +61,8 @@
 		features: Record<string, boolean>;
 		hiddenActions: string[];
 		statusReadOnly: Record<string, boolean>;
-	}>({ features: {}, hiddenActions: [], statusReadOnly: {} });
+		periodic: boolean;
+	}>({ features: {}, hiddenActions: [], statusReadOnly: {}, periodic: false });
 	let selectedTypeDef = $state<TableTypeModule | null>(null);
 
 	// Синоним таблицы (черновик)
@@ -115,7 +116,8 @@
 		editConfig = {
 			features: { ...effective.features },
 			hiddenActions: [...(effective.hiddenActions ?? [])],
-			statusReadOnly: { ...(effective.statusReadOnly ?? {}) }
+			statusReadOnly: { ...(effective.statusReadOnly ?? {}) },
+			periodic: effective.periodic ?? false
 		};
 
 		const cols = await db.meta_columns
@@ -340,6 +342,37 @@
 					}
 				}
 			}
+
+			// Периодическая константа: автоматически создаём таблицу периодов
+			if (selectedTableMeta.type === 'constant' && editConfig.periodic) {
+				const hasChild = subTablesDraft.some((s) => !s.deleted);
+				if (!hasChild) {
+					const childName = genSlug(`${selectedTableMeta.name ?? 'constant'}_periods`, 'tbl');
+					const childId = await metadata.createNewTable(
+						'Периоды',
+						'template',
+						childName,
+						selectedTableId
+					);
+					if (childId) {
+						const valueType = headerColumns.find((c) => !c.deleted)?.type ?? 'string';
+						await metadata.saveOrUpdateColumn(childId, 'new', {
+							name: 'period',
+							title: 'Период',
+							type: 'date',
+							sort_order: 1,
+							related_table_id: null
+						});
+						await metadata.saveOrUpdateColumn(childId, 'new', {
+							name: 'value',
+							title: 'Значение',
+							type: valueType,
+							sort_order: 2,
+							related_table_id: null
+						});
+					}
+				}
+			}
 		} finally {
 			saving = false;
 		}
@@ -385,7 +418,7 @@
 			</div>
 		{/if}
 
-		{#if selectedTableId}
+		{#if selectedTableMeta && selectedTableId}
 			<div class="editor-workspace">
 				<!-- 1. Реквизиты Шапки -->
 				<h4>1. Реквизиты Шапки:</h4>
@@ -420,35 +453,37 @@
 					</tbody>
 				</table>
 
-				<div class="add-main-column-zone">
-					<input
-						aria-label="Имя нового поля"
-						type="text"
-						bind:value={newColName}
-						placeholder="Имя реквизита"
-					/>
-					<input
-						aria-label="Синоним нового поля"
-						type="text"
-						bind:value={newColTitle}
-						placeholder="Синоним"
-					/>
-					<select aria-label="Тип нового поля" bind:value={newColType}>
-						{#each fieldTypeList as ft}
-							<option value={ft.type}>{ft.label}</option>
-						{/each}
-					</select>
+				{#if selectedTableMeta.type !== 'constant' || headerColumns.filter((c) => !c.deleted).length === 0}
+					<div class="add-main-column-zone">
+						<input
+							aria-label="Имя нового поля"
+							type="text"
+							bind:value={newColName}
+							placeholder="Имя реквизита"
+						/>
+						<input
+							aria-label="Синоним нового поля"
+							type="text"
+							bind:value={newColTitle}
+							placeholder="Синоним"
+						/>
+						<select aria-label="Тип нового поля" bind:value={newColType}>
+							{#each fieldTypeList as ft}
+								<option value={ft.type}>{ft.label}</option>
+							{/each}
+						</select>
 
-					{#if newColType === 'link'}
-						<LinkConfig bind:relatedTableId={newColRelatedTableId} {allTables} />
-					{/if}
-					<button onclick={() => handleAddOrUpdateColumn('main')} class="btn-blue">
-						{editingKey === 'main' ? 'Применить' : '➕ Добавить в шапку'}
-					</button>
-					{#if editingKey === 'main'}
-						<button onclick={handleCancelEdit} class="btn-cancel">Отмена</button>
-					{/if}
-				</div>
+						{#if newColType === 'link'}
+							<LinkConfig bind:relatedTableId={newColRelatedTableId} {allTables} />
+						{/if}
+						<button onclick={() => handleAddOrUpdateColumn('main')} class="btn-blue">
+							{editingKey === 'main' ? 'Применить' : '➕ Добавить в шапку'}
+						</button>
+						{#if editingKey === 'main'}
+							<button onclick={handleCancelEdit} class="btn-cancel">Отмена</button>
+						{/if}
+					</div>
+				{/if}
 
 				<!-- 2. Настройки объекта -->
 				<h4 style="margin-top:2rem;">2. Настройки объекта:</h4>
@@ -505,119 +540,129 @@
 								{/each}
 							</div>
 						{/if}
+
+						{#if selectedTableMeta.type === 'constant'}
+							<div class="cfg-status-readonly">
+								<label class="cfg-check">
+									<input type="checkbox" bind:checked={editConfig.periodic} onchange={markDirty} />
+									📅 Периодическая (значения по датам, создаётся таблица «Периоды»)
+								</label>
+							</div>
+						{/if}
 					</div>
 				{/if}
 
-				<!-- 3. Табличные части — вкладки -->
-				<h4 style="margin-top:2rem;">3. Табличные части:</h4>
-
-				<div class="sub-tabs-bar">
-					{#each visibleSubTables as sub, i}
-						<button
-							class="sub-tab"
-							class:active={activeSubIndex === i}
-							onclick={() => (activeSubIndex = i)}
-						>
-							{sub.title}{#if sub.isNew}<span class="sub-new-flag"> (нов.)</span>{/if}
-						</button>
-					{/each}
-					<button class="sub-tab add-tab" onclick={() => (activeSubIndex = visibleSubTables.length)}
-						>+</button
-					>
-				</div>
-
-				{#if activeSubIndex < visibleSubTables.length}
-					{@const sub = visibleSubTables[activeSubIndex]}
-					<div class="sub-tab-content">
-						<div class="sub-tab-header">
-							<strong>{sub.title}</strong>
-							<span>[{sub.name || 'новое имя'}]</span>
+				<!-- 3. Табличные части — вкладки (для констант управляются автоматически) -->
+				{#if selectedTableMeta.type !== 'constant'}
+					<div class="sub-tabs-bar">
+						{#each visibleSubTables as sub, i}
 							<button
-								onclick={() => handleDeleteSubTable(sub)}
-								class="btn-icon-del"
-								title="Удалить ТЧ">🗑️</button
+								class="sub-tab"
+								class:active={activeSubIndex === i}
+								onclick={() => (activeSubIndex = i)}
 							>
-						</div>
-
-						<table class="config-table" border="1">
-							<thead>
-								<tr
-									><th>Имя</th><th>Заголовок</th><th>Тип реквизита</th><th style="width:80px;"
-										>Действия</th
-									></tr
-								>
-							</thead>
-							<tbody>
-								{#each sub.columns.filter((c) => !c.deleted) as col}
-									<tr class:editing-row={editingColKey === col.key}>
-										<td>{col.name}</td>
-										<td>{col.title}</td>
-										<td>{col.type}</td>
-										<td class="text-center">
-											<button
-												onclick={() => handleEditColumn(sub.key, col)}
-												class="btn-icon-edit"
-												title="Редактировать реквизит">✏️</button
-											>
-											<button
-												onclick={() => handleDeleteColumn(sub.key, col)}
-												class="btn-icon-del"
-												title="Удалить реквизит">❌</button
-											>
-										</td>
-									</tr>
-								{/each}
-							</tbody>
-						</table>
-
-						<div class="add-main-column-zone">
-							<input
-								aria-label="Имя поля ТЧ"
-								type="text"
-								bind:value={newColName}
-								placeholder="Имя реквизита"
-							/>
-							<input
-								aria-label="Синоним поля ТЧ"
-								type="text"
-								bind:value={newColTitle}
-								placeholder="Синоним"
-							/>
-							<select aria-label="Тип поля ТЧ" bind:value={newColType}>
-								{#each fieldTypeList as ft}
-									<option value={ft.type}>{ft.label}</option>
-								{/each}
-							</select>
-							{#if newColType === 'link'}
-								<LinkConfig bind:relatedTableId={newColRelatedTableId} {allTables} />
-							{/if}
-							<button onclick={() => handleAddOrUpdateColumn(sub.key)} class="btn-blue">
-								{editingKey === sub.key ? 'Применить' : '➕ Добавить в ТЧ'}
+								{sub.title}{#if sub.isNew}<span class="sub-new-flag"> (нов.)</span>{/if}
 							</button>
-							{#if editingKey === sub.key}
-								<button onclick={handleCancelEdit} class="btn-cancel">Отмена</button>
-							{/if}
-						</div>
+						{/each}
+						<button
+							class="sub-tab add-tab"
+							onclick={() => (activeSubIndex = visibleSubTables.length)}>+</button
+						>
 					</div>
-				{:else}
-					<div class="create-subtable-zone">
-						<h5>➕ Добавить новую Табличную Часть:</h5>
-						<div class="flex-inputs">
-							<input
-								aria-label="Имя новой ТЧ"
-								type="text"
-								bind:value={newSubName}
-								placeholder="Имя ТЧ (e.g., contacts)"
-							/>
-							<input
-								aria-label="Синоним новой ТЧ"
-								type="text"
-								bind:value={newSubTitle}
-								placeholder="Синоним ТЧ (e.g., Контакты)"
-							/>
-							<button onclick={handleAddSubTable} class="btn-blue">➕ Создать ТЧ</button>
+
+					{#if activeSubIndex < visibleSubTables.length}
+						{@const sub = visibleSubTables[activeSubIndex]}
+						<div class="sub-tab-content">
+							<div class="sub-tab-header">
+								<strong>{sub.title}</strong>
+								<span>[{sub.name || 'новое имя'}]</span>
+								<button
+									onclick={() => handleDeleteSubTable(sub)}
+									class="btn-icon-del"
+									title="Удалить ТЧ">🗑️</button
+								>
+							</div>
+
+							<table class="config-table" border="1">
+								<thead>
+									<tr
+										><th>Имя</th><th>Заголовок</th><th>Тип реквизита</th><th style="width:80px;"
+											>Действия</th
+										></tr
+									>
+								</thead>
+								<tbody>
+									{#each sub.columns.filter((c) => !c.deleted) as col}
+										<tr class:editing-row={editingColKey === col.key}>
+											<td>{col.name}</td>
+											<td>{col.title}</td>
+											<td>{col.type}</td>
+											<td class="text-center">
+												<button
+													onclick={() => handleEditColumn(sub.key, col)}
+													class="btn-icon-edit"
+													title="Редактировать реквизит">✏️</button
+												>
+												<button
+													onclick={() => handleDeleteColumn(sub.key, col)}
+													class="btn-icon-del"
+													title="Удалить реквизит">❌</button
+												>
+											</td>
+										</tr>
+									{/each}
+								</tbody>
+							</table>
+
+							<div class="add-main-column-zone">
+								<input
+									aria-label="Имя поля ТЧ"
+									type="text"
+									bind:value={newColName}
+									placeholder="Имя реквизита"
+								/>
+								<input
+									aria-label="Синоним поля ТЧ"
+									type="text"
+									bind:value={newColTitle}
+									placeholder="Синоним"
+								/>
+								<select aria-label="Тип поля ТЧ" bind:value={newColType}>
+									{#each fieldTypeList as ft}
+										<option value={ft.type}>{ft.label}</option>
+									{/each}
+								</select>
+								{#if newColType === 'link'}
+									<LinkConfig bind:relatedTableId={newColRelatedTableId} {allTables} />
+								{/if}
+								<button onclick={() => handleAddOrUpdateColumn(sub.key)} class="btn-blue">
+									{editingKey === sub.key ? 'Применить' : '➕ Добавить в ТЧ'}
+								</button>
+								{#if editingKey === sub.key}
+									<button onclick={handleCancelEdit} class="btn-cancel">Отмена</button>
+								{/if}
+							</div>
 						</div>
-					</div>
+					{:else}
+						<div class="create-subtable-zone">
+							<h5>➕ Добавить новую Табличную Часть:</h5>
+							<div class="flex-inputs">
+								<input
+									aria-label="Имя новой ТЧ"
+									type="text"
+									bind:value={newSubName}
+									placeholder="Имя ТЧ (e.g., contacts)"
+								/>
+								<input
+									aria-label="Синоним новой ТЧ"
+									type="text"
+									bind:value={newSubTitle}
+									placeholder="Синоним ТЧ (e.g., Контакты)"
+								/>
+								<button onclick={handleAddSubTable} class="btn-blue">➕ Создать ТЧ</button>
+							</div>
+						</div>
+					{/if}
 				{/if}
 			</div>
 		{/if}

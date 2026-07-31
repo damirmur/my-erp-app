@@ -10,6 +10,7 @@ export interface TableConfig {
 	};
 	hiddenActions?: string[];
 	statusReadOnly?: Record<string, boolean>;
+	periodic?: boolean; // для типа constant: периодическое значение
 }
 
 export interface LocalTable {

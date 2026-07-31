@@ -7,6 +7,7 @@ import directory from './directory';
 import document from './document';
 import template from './template';
 import constant from './constant';
+import tabular from './tabular';
 
 export type { TableTypeModule, StatusDef, ActionDef };
 export type { TableConfig };
@@ -16,7 +17,8 @@ const builtinRegistry: Record<string, TableTypeModule> = {
 	directory,
 	document,
 	template,
-	constant
+	constant,
+	tabular
 };
 const defaultType = document;
 
@@ -57,7 +59,8 @@ export async function syncTableTypes() {
 						? (s: string) => s !== a.showWhenNot
 						: undefined,
 				disabled: a.disabledWhen ? (s: string) => a.disabledWhen!.split(',').includes(s) : undefined
-			}))
+			})),
+			fields: def.fields ?? []
 		};
 	}
 	dynamicTypes.set(loaded);
@@ -94,22 +97,82 @@ export function getActions(type: string, mode: string, config?: Record<string, a
 	return getTableType(type).actions.filter((a) => a.type === mode && !hide.includes(a.id));
 }
 
+// upsert в PostgREST (ON CONFLICT DO UPDATE) при включённом RLS отбивает 42501,
+// поэтому сохраняем явно: SELECT -> INSERT или UPDATE
+async function saveTypeRow(name: string, label: string, definition: Record<string, any>) {
+	const { data: existing } = await supabase
+		.from('meta_table_types')
+		.select('name')
+		.eq('name', name)
+		.maybeSingle();
+
+	let error: any = null;
+	if (existing) {
+		({ error } = await supabase
+			.from('meta_table_types')
+			.update({ label, definition })
+			.eq('name', name));
+	} else {
+		({ error } = await supabase.from('meta_table_types').insert({ name, label, definition }));
+	}
+	if (error) throw error;
+}
+
 export async function saveTableTypeToDB(name: string, label: string, module: TableTypeModule) {
 	const definition = {
 		statuses: module.statuses,
 		features: module.features,
+		fields: module.fields ?? [],
 		actions: module.actions.map((a) => ({
 			id: a.id,
 			label: a.label,
 			icon: a.icon,
 			type: a.type,
-			variant: a.variant
+			variant: a.variant,
+			showWhen: (a as any).showWhen,
+			showWhenNot: (a as any).showWhenNot,
+			disabledWhen: (a as any).disabledWhen
 		}))
 	};
-	const { error } = await supabase
+	await saveTypeRow(name, label, definition);
+	await syncTableTypes();
+}
+
+// Создать новый тип от базового: копирует definition (статусы/действия/фичи/шаблон полей)
+// из строки meta_table_types базового типа (если есть) или из встроенного модуля
+export async function createTableTypeFromBase(baseName: string, name: string, label: string) {
+	const { data, error } = await supabase
 		.from('meta_table_types')
-		.upsert({ name, label, definition }, { onConflict: 'name' });
-	if (error) throw error;
+		.select('definition')
+		.eq('name', baseName)
+		.maybeSingle();
+
+	let definition: Record<string, any>;
+	if (!error && data?.definition) {
+		definition = data.definition;
+	} else {
+		const mod = getTableType(baseName);
+		definition = {
+			statuses: mod.statuses,
+			features: mod.features,
+			fields: mod.fields ?? [],
+			actions: mod.actions.map((a) => ({
+				id: a.id,
+				label: a.label,
+				icon: a.icon,
+				type: a.type,
+				variant: a.variant,
+				showWhen: (a as any).showWhen,
+				showWhenNot: (a as any).showWhenNot,
+				disabledWhen: (a as any).disabledWhen
+			}))
+		};
+	}
+
+	// Глубокая копия, чтобы новый тип не делил объекты с базовым
+	const cloned = JSON.parse(JSON.stringify(definition));
+
+	await saveTypeRow(name, label, cloned);
 	await syncTableTypes();
 }
 

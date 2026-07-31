@@ -18,7 +18,8 @@ const constant: TableTypeModule = {
 		print: false,
 		tabularSections: false
 	},
-	actions: [{ id: 'save', label: 'Записать', icon: '💾', type: 'form' }]
+	actions: [{ id: 'save', label: 'Записать', icon: '💾', type: 'form' }],
+	fields: [{ name: 'value', title: 'Значение', type: 'string' }]
 };
 
 export default constant;

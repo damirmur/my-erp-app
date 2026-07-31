@@ -34,10 +34,19 @@ export interface TableTypeFeatures {
 	tabularSections: boolean;
 }
 
+// Шаблон поля: колонки, создаваемые автоматически при создании таблицы этого типа
+export interface FieldTemplate {
+	name: string;
+	title: string;
+	type: string;
+	related_table_id?: string | null;
+}
+
 export interface TableTypeModule {
 	type: string;
 	label: string;
 	statuses: StatusDef[];
 	features: TableTypeFeatures;
 	actions: ActionDef[];
+	fields?: FieldTemplate[];
 }

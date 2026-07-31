@@ -314,7 +314,7 @@
 				}
 				let subId = sub.dbId;
 				if (!subId) {
-					subId = await metadata.createNewTable(sub.title, 'template', sub.name, selectedTableId);
+					subId = await metadata.createNewTable(sub.title, 'tabular', sub.name, selectedTableId);
 				}
 				if (subId) {
 					for (const col of sub.columns) {
@@ -350,7 +350,7 @@
 					const childName = genSlug(`${selectedTableMeta.name ?? 'constant'}_periods`, 'tbl');
 					const childId = await metadata.createNewTable(
 						'Периоды',
-						'template',
+						'tabular',
 						childName,
 						selectedTableId
 					);

@@ -26,11 +26,10 @@
 		tableMeta?.config?.features?.hierarchy ?? tableTypeDef.features.hierarchy
 	);
 
-	// Для констант: автоматически создаём единственную запись и открываем её форму
-	let constantAutoOpened = $state(false);
-
+	// Для констант: автоматически создаём единственную запись и открываем её форму.
+	// Подавление повторного открытия живёт в workspace (переживает перемонтирование списка).
 	$effect(() => {
-		if (tableType !== 'constant' || constantAutoOpened) return;
+		if (tableType !== 'constant' || workspace.isConstantAutoOpenSuppressed(tableId)) return;
 		if (!tableMeta || loading) return;
 		if (records.length === 0) {
 			db.data_records.put({
@@ -44,10 +43,10 @@
 				updated_at: new Date().toISOString()
 			});
 		} else {
+			workspace.suppressConstantAutoOpen(tableId);
 			const record = records[0];
 			const name = tableMeta?.title ?? 'Константа';
 			workspace.openForm(tableId, record.id, name);
-			constantAutoOpened = true;
 		}
 	});
 

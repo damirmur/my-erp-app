@@ -15,6 +15,10 @@ class WorkspaceManager {
 	sidebarCollapsed = $state(false);
 	mode = $state<'main' | 'constructor'>('main');
 
+	// Таблицы-константы, форма которых уже открывалась автоматически (или закрыта вручную).
+	// Подавление переживает перемонтирование списка и сбрасывается при открытии списка заново.
+	private constantFormOpened = new Set<string>();
+
 	// Вычисляемое свойство через руну $derived: возвращает объект текущего активного таба
 	activeTab = $derived(this.tabs.find((t) => t.id === this.activeTabId) || null);
 
@@ -28,6 +32,9 @@ class WorkspaceManager {
 			this.activeTabId = tabId;
 			return;
 		}
+
+		// Новое открытие списка сбрасывает подавление автооткрытия формы константы
+		this.constantFormOpened.delete(tableId);
 
 		// Иначе добавляем новую вкладку в массив
 		this.tabs.push({
@@ -80,6 +87,9 @@ class WorkspaceManager {
 			);
 			if (!confirmClose) return;
 		}
+
+		// Закрытие формы константы вручную подавляет её повторное автооткрытие
+		this.constantFormOpened.add(tab.tableId);
 
 		// Удаляем вкладку из массива (мутации массивов во Svelte 5 триггерят реактивность автоматически)
 		this.tabs.splice(tabIndex, 1);
@@ -161,6 +171,16 @@ class WorkspaceManager {
 		if (tab) {
 			tab.title = newTitle;
 		}
+	}
+
+	// 11. Отметить, что форма константы уже открывалась автоматически (не открывать повторно)
+	suppressConstantAutoOpen(tableId: string) {
+		this.constantFormOpened.add(tableId);
+	}
+
+	// 12. Проверить, подавлено ли автооткрытие формы константы
+	isConstantAutoOpenSuppressed(tableId: string): boolean {
+		return this.constantFormOpened.has(tableId);
 	}
 }
 

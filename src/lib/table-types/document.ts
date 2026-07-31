@@ -87,6 +87,10 @@ const document: TableTypeModule = {
 		{ id: 'massRestore', label: 'Восстановить', icon: '↩️', type: 'list' },
 		{ id: 'print', label: 'Печать', icon: '🖨️', type: 'list' },
 		{ id: 'print', label: 'Печать', icon: '🖨️', type: 'form' }
+	],
+	fields: [
+		{ name: 'number', title: 'Номер', type: 'string' },
+		{ name: 'name', title: 'Содержание', type: 'string' }
 	]
 };
 

@@ -52,6 +52,10 @@ const directory: TableTypeModule = {
 		{ id: 'massRestore', label: 'Восстановить', icon: '↩️', type: 'list' },
 		{ id: 'print', label: 'Печать', icon: '🖨️', type: 'list' },
 		{ id: 'print', label: 'Печать', icon: '🖨️', type: 'form' }
+	],
+	fields: [
+		{ name: 'number', title: 'Код', type: 'string' },
+		{ name: 'name', title: 'Наименование', type: 'string' }
 	]
 };
 

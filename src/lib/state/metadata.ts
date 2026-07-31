@@ -1,4 +1,5 @@
 import { supabase } from '$lib/db/supabase';
+import { getTableType } from '$lib/table-types';
 
 function slugify(text: string): string {
 	const slug = text
@@ -37,17 +38,18 @@ class MetadataManager {
 		}
 
 		if (data && !parentTableId) {
-			if (type === 'constant') {
-				// Константа: единственное поле value, тип меняется в конструкторе
-				await supabase.from('meta_columns').insert([
-					{
+			const template = getTableType(type).fields ?? [];
+			if (template.length > 0) {
+				// Поля по шаблону типа (в т.ч. кастомные типы)
+				await supabase.from('meta_columns').insert(
+					template.map((f, i) => ({
 						table_id: data.id,
-						name: 'value',
-						title: 'Значение',
-						type: 'string',
-						sort_order: 1
-					}
-				]);
+						name: f.name,
+						title: f.title,
+						type: f.type,
+						sort_order: i + 1
+					}))
+				);
 			} else {
 				// Базовые реквизиты создаем только для независимых объектов
 				await supabase.from('meta_columns').insert([

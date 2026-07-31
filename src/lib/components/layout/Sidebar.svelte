@@ -4,15 +4,34 @@
 	import { metadata } from '$lib/state/metadata';
 	import { syncService } from '$lib/services/sync';
 	import { liveQuery } from 'dexie';
+	import { tableTypeList, deleteTableTypeFromDB, createTableTypeFromBase } from '$lib/table-types';
 
-	// Карта человекочитаемых названий типов таблиц
-	const typeLabels: Record<string, string> = {
+	// Порядок встроенных групп в сайдбаре; кастомные типы идут после
+	const preferredTypeOrder = ['directory', 'document', 'register', 'constant', 'system'];
+
+	// Заголовки групп встроенных типов (множественное число)
+	const groupTitles: Record<string, string> = {
 		directory: '📁 Справочники',
 		document: '📄 Документы',
 		register: '📊 Регистры',
 		constant: '🏷️ Константы',
 		system: '⚙️ Системные'
 	};
+
+	function groupTitle(type: string, label: string): string {
+		return groupTitles[type] ?? label;
+	}
+
+	// Типы таблиц (встроенные + из БД), в порядке для отображения
+	let typeList = $derived.by(() => {
+		const types = [...$tableTypeList];
+		types.sort((a, b) => {
+			const ia = preferredTypeOrder.indexOf(a.type);
+			const ib = preferredTypeOrder.indexOf(b.type);
+			return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib) || a.label.localeCompare(b.label);
+		});
+		return types;
+	});
 
 	let tables = $state<LocalTable[]>([]);
 	let loading = $state(true);
@@ -32,21 +51,13 @@
 		return () => subscription.unsubscribe();
 	});
 
-	// Группированное дерево для основного режима
-	let groupedTables = $derived.by(() => {
-		const groups: Record<string, LocalTable[]> = {
-			directory: [],
-			document: [],
-			register: [],
-			constant: [],
-			system: []
-		};
+	// Таблицы, сгруппированные по типу
+	let tablesByType = $derived.by(() => {
+		const map: Record<string, LocalTable[]> = {};
 		tables.forEach((table) => {
-			if (groups[table.type]) {
-				groups[table.type].push(table);
-			}
+			(map[table.type] ??= []).push(table);
 		});
-		return groups;
+		return map;
 	});
 
 	// В режиме конструктора показываем все таблицы верхнего уровня (без табличных частей)
@@ -136,6 +147,99 @@
 		}
 	}
 
+	// ---- Типы таблиц: создание и удаление ----
+	const translitMap: Record<string, string> = {
+		а: 'a',
+		б: 'b',
+		в: 'v',
+		г: 'g',
+		д: 'd',
+		е: 'e',
+		ё: 'e',
+		ж: 'zh',
+		з: 'z',
+		и: 'i',
+		й: 'y',
+		к: 'k',
+		л: 'l',
+		м: 'm',
+		н: 'n',
+		о: 'o',
+		п: 'p',
+		р: 'r',
+		с: 's',
+		т: 't',
+		у: 'u',
+		ф: 'f',
+		х: 'h',
+		ц: 'ts',
+		ч: 'ch',
+		ш: 'sh',
+		щ: 'sch',
+		ъ: '',
+		ы: 'y',
+		ь: '',
+		э: 'e',
+		ю: 'yu',
+		я: 'ya'
+	};
+
+	function translit(text: string): string {
+		return text
+			.toLowerCase()
+			.split('')
+			.map((ch) => translitMap[ch] ?? ch)
+			.join('')
+			.replace(/[^a-z0-9]+/g, '_')
+			.replace(/^_|_$/g, '');
+	}
+
+	let creatingType = $state(false);
+	let newTypeLabel = $state('');
+	let newTypeName = $state('');
+	let newTypeBase = $state('directory');
+
+	async function handleCreateType() {
+		const label = newTypeLabel.trim();
+		if (!label) return;
+		const name = newTypeName.trim() || translit(label);
+		try {
+			await createTableTypeFromBase(newTypeBase, name, label);
+		} catch (e: any) {
+			alert(`Ошибка создания типа: ${e?.message ?? e}`);
+			return;
+		}
+		creatingType = false;
+		newTypeLabel = '';
+		newTypeName = '';
+		newTypeBase = 'directory';
+	}
+
+	function handleTypeKeydown(e: KeyboardEvent) {
+		if (e.key === 'Enter') {
+			e.preventDefault();
+			handleCreateType();
+		} else if (e.key === 'Escape') {
+			creatingType = false;
+			newTypeLabel = '';
+			newTypeName = '';
+		}
+	}
+
+	async function handleDeleteType(typeName: string, typeLabel: string) {
+		const count = tablesByType[typeName]?.length ?? 0;
+		if (count > 0) {
+			alert(`Нельзя удалить тип "${typeLabel}": в нём ${count} таблиц(а). Сначала удалите их.`);
+			return;
+		}
+		if (!confirm(`Удалить тип "${typeLabel}" (${typeName})?`)) return;
+		try {
+			await deleteTableTypeFromDB(typeName);
+		} catch (e: any) {
+			alert(`Ошибка удаления типа: ${e?.message ?? e}`);
+		}
+	}
+
 	// Удаление таблицы (каскадно: подтаблицы + реквизиты)
 	async function handleDeleteTable(id: string, title: string) {
 		const subs = subTablesByParent.get(id) ?? [];
@@ -187,19 +291,91 @@
 			<div class="p-4 text-gray-500 text-sm">Загрузка конфигурации...</div>
 		{:else}
 			<nav class="sidebar-nav">
-				{#each Object.entries(typeLabels) as [typeKey, typeLabel]}
-					{#if workspace.mode === 'constructor' || groupedTables[typeKey].length > 0}
+				{#if workspace.mode === 'constructor'}
+					<div class="types-section">
+						<div class="group-header-row">
+							<span class="group-title">🗂 Типы таблиц</span>
+							<button
+								class="group-add-btn"
+								class:active={creatingType}
+								onclick={() => (creatingType = !creatingType)}
+								title="Добавить тип от базового"
+							>
+								＋
+							</button>
+						</div>
+
+						{#if creatingType}
+							<div class="create-type-form">
+								<input
+									type="text"
+									bind:value={newTypeLabel}
+									onkeydown={handleTypeKeydown}
+									placeholder="Синоним (например, Отчёт)"
+									class="create-table-input"
+									use:autofocusInput
+								/>
+								<input
+									type="text"
+									bind:value={newTypeName}
+									onkeydown={handleTypeKeydown}
+									placeholder="Имя (лат.), напр. report"
+									class="create-table-input"
+								/>
+								<select bind:value={newTypeBase} class="create-table-input">
+									{#each typeList as t}
+										{#if t.type !== 'tabular'}
+											<option value={t.type}>{t.label} ({t.type})</option>
+										{/if}
+									{/each}
+								</select>
+								<div class="create-type-actions">
+									<button onclick={handleCreateType} class="type-btn type-btn-primary"
+										>Создать тип</button
+									>
+									<button
+										onclick={() => {
+											creatingType = false;
+											newTypeLabel = '';
+											newTypeName = '';
+										}}
+										class="type-btn">Отмена</button
+									>
+								</div>
+							</div>
+						{/if}
+
+						<ul>
+							{#each typeList as t}
+								<li class="type-row">
+									<span class="type-row-label">{groupTitle(t.type, t.label)}</span>
+									<span class="nav-item-code">{t.type}</span>
+									<span class="type-count">{tablesByType[t.type]?.length ?? 0}</span>
+									<button
+										class="row-del-btn"
+										onclick={() => handleDeleteType(t.type, t.label)}
+										title="Удалить тип">✕</button
+									>
+								</li>
+							{/each}
+						</ul>
+					</div>
+				{/if}
+
+				{#each typeList as typeDef}
+					{#if typeDef.type !== 'tabular' && (workspace.mode === 'constructor' || (tablesByType[typeDef.type]?.length ?? 0) > 0)}
 						<div class="nav-group">
 							<div class="group-header-row">
-								<button class="group-header" onclick={() => toggleGroup(typeKey)}>
-									<span class="chevron">{isGroupExpanded(typeKey) ? '▾' : '▸'}</span>
-									<span class="group-title">{typeLabel}</span>
+								<button class="group-header" onclick={() => toggleGroup(typeDef.type)}>
+									<span class="chevron">{isGroupExpanded(typeDef.type) ? '▾' : '▸'}</span>
+									<span class="group-title">{groupTitle(typeDef.type, typeDef.label)}</span>
 								</button>
 								{#if workspace.mode === 'constructor'}
 									<button
 										class="group-add-btn"
-										class:active={creatingGroup === typeKey}
-										onclick={() => (creatingGroup = creatingGroup === typeKey ? null : typeKey)}
+										class:active={creatingGroup === typeDef.type}
+										onclick={() =>
+											(creatingGroup = creatingGroup === typeDef.type ? null : typeDef.type)}
 										title="Добавить таблицу этого типа"
 									>
 										＋
@@ -207,9 +383,9 @@
 								{/if}
 							</div>
 
-							{#if isGroupExpanded(typeKey)}
+							{#if isGroupExpanded(typeDef.type)}
 								<ul>
-									{#if creatingGroup === typeKey}
+									{#if creatingGroup === typeDef.type}
 										<li class="create-row">
 											<input
 												type="text"
@@ -223,7 +399,7 @@
 									{/if}
 
 									{#if workspace.mode === 'constructor'}
-										{#each constructorTables.filter((t) => t.type === typeKey) as table}
+										{#each constructorTables.filter((t) => t.type === typeDef.type) as table}
 											{@const subs = subTablesByParent.get(table.id) ?? []}
 											<li class="tree-row">
 												<div class="tree-row-main">
@@ -274,7 +450,7 @@
 											</li>
 										{/each}
 									{:else}
-										{#each groupedTables[typeKey] as table}
+										{#each tablesByType[typeDef.type] ?? [] as table}
 											<li>
 												<button
 													onclick={() => workspace.openList(table.id, table.title)}
@@ -344,6 +520,65 @@
 		padding: 1rem 0.5rem;
 		overflow-y: auto;
 		flex: 1;
+	}
+	.types-section {
+		margin-bottom: 1.25rem;
+		padding-bottom: 0.75rem;
+		border-bottom: 1px solid #e5e7eb;
+	}
+	.create-type-form {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+		padding: 0 0.25rem 0.5rem;
+	}
+	.create-type-actions {
+		display: flex;
+		gap: 6px;
+	}
+	.type-btn {
+		flex: 1;
+		background: #ffffff;
+		border: 1px solid #cbd5e1;
+		border-radius: 0.25rem;
+		font-size: 0.8rem;
+		padding: 4px 8px;
+		cursor: pointer;
+		color: #475569;
+	}
+	.type-btn:hover {
+		background: #f1f5f9;
+	}
+	.type-btn-primary {
+		background: #2563eb;
+		border-color: #2563eb;
+		color: #ffffff;
+	}
+	.type-btn-primary:hover {
+		background: #1d4ed8;
+	}
+	.type-row {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		padding: 3px 0.25rem;
+		font-size: 0.8rem;
+	}
+	.type-row:hover {
+		background-color: #e5e7eb;
+		border-radius: 0.25rem;
+	}
+	.type-row-label {
+		flex: 1;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		color: #4b5563;
+	}
+	.type-count {
+		font-size: 0.7rem;
+		color: #94a3b8;
+		flex-shrink: 0;
 	}
 	.nav-group {
 		margin-bottom: 1.25rem;

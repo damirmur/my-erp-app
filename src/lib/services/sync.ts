@@ -112,42 +112,60 @@ export const syncService = {
 			const dirtyRecords = await db.data_records.where('is_dirty').equals(1).toArray();
 
 			for (const localRecord of dirtyRecords) {
-				// Извлекаем связанные строки табличной части для текущего документа
-				const localLines = await db.data_lines.where('record_id').equals(localRecord.id).toArray();
+				try {
+					// Извлекаем связанные строки табличной части для текущего документа
+					const localLines = await db.data_lines
+						.where('record_id')
+						.equals(localRecord.id)
+						.toArray();
 
-				// 1. Отправляем шапку документа/справочника (используем upsert)
-				const { error: rError } = await supabase.from('data_records').upsert({
-					id: localRecord.id,
-					table_id: localRecord.table_id,
-					status: localRecord.status,
-					data: localRecord.data,
-					updated_at: new Date().toISOString(), // Сервер обновит метку времени
-					is_folder: localRecord.is_folder ?? false,
-					parent_id: localRecord.parent_id ?? null
-				});
+					// 1. Отправляем шапку документа/справочника (используем upsert)
+					const { error: rError } = await supabase.from('data_records').upsert({
+						id: localRecord.id,
+						table_id: localRecord.table_id,
+						status: localRecord.status,
+						data: localRecord.data,
+						updated_at: new Date().toISOString(), // Сервер обновит метку времени
+						is_folder: localRecord.is_folder ?? false,
+						parent_id: localRecord.parent_id ?? null
+					});
 
-				if (rError) throw rError;
+					if (rError) throw rError;
 
-				// 2. Синхронизируем табличную часть.
-				// Чтобы не усложнять, сначала удалим старые строки этой ТЧ на сервере и запишем новые
-				await supabase.from('data_lines').delete().eq('record_id', localRecord.id);
+					// 2. Синхронизируем табличную часть.
+					// Чтобы не усложнять, сначала удалим старые строки этой ТЧ на сервере и запишем новые
+					await supabase.from('data_lines').delete().eq('record_id', localRecord.id);
 
-				if (localLines.length > 0) {
-					const linesToUpsert = localLines.map((l) => ({
-						id: l.id,
-						record_id: l.record_id,
-						table_id: l.table_id,
-						data: l.data,
-						sort_order: l.sort_order
-					}));
+					if (localLines.length > 0) {
+						const linesToUpsert = localLines.map((l) => ({
+							id: l.id,
+							record_id: l.record_id,
+							table_id: l.table_id,
+							data: l.data,
+							sort_order: l.sort_order
+						}));
 
-					const { error: lError } = await supabase.from('data_lines').upsert(linesToUpsert);
+						const { error: lError } = await supabase.from('data_lines').upsert(linesToUpsert);
 
-					if (lError) throw lError;
+						if (lError) throw lError;
+					}
+
+					// 3. Если все прошло гладко, снимаем флаг "is_dirty" в IndexedDB
+					await db.data_records.update(localRecord.id, { is_dirty: 0 });
+				} catch (err) {
+					// 23503 — нарушение внешнего ключа: таблица удалена на сервере,
+					// запись никогда не сможет синхронизироваться. Убираем её локально,
+					// иначе она будет вечно блокировать отправку других записей.
+					if ((err as { code?: string })?.code === '23503') {
+						await db.data_records.delete(localRecord.id);
+						await db.data_lines.where('record_id').equals(localRecord.id).delete();
+						console.warn(
+							`Запись ${localRecord.id} удалена локально: её таблица отсутствует на сервере.`
+						);
+					} else {
+						console.error(`Ошибка отправки записи ${localRecord.id}:`, err);
+					}
 				}
-
-				// 3. Если все прошло гладко, снимаем флаг "is_dirty" в IndexedDB
-				await db.data_records.update(localRecord.id, { is_dirty: 0 });
 			}
 
 			if (dirtyRecords.length > 0) {

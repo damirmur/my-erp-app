@@ -3,8 +3,12 @@
 	import { workspace } from '$lib/state/workspace.svelte';
 	import { printerService } from '$lib/services/printer';
 	import { numberService } from '$lib/services/numbers';
+	import { physicalDeleteRecords } from '$lib/services/records';
+	import { runActionCode, saveRecordWithLines } from '$lib/services/actionRunner';
+	import { supabase } from '$lib/db/supabase';
 	import { isReadOnly } from '$lib/table-types';
 	import { fieldRegistry } from '$lib/fields';
+	import { isValidBirthLocal, defaultBirth } from '$lib/fields/birth';
 	import Toolbar from './Toolbar.svelte';
 	import TabularSection from './TabularSection.svelte';
 	import PeriodsTable from './PeriodsTable.svelte';
@@ -124,7 +128,8 @@
 
 		columns.forEach((col) => {
 			if (recordData[col.name] === undefined) {
-				recordData[col.name] = col.type === 'boolean' ? false : '';
+				recordData[col.name] =
+					col.type === 'boolean' ? false : col.type === 'birth' ? defaultBirth() : '';
 			}
 		});
 
@@ -163,6 +168,36 @@
 	}
 
 	async function saveToDb(targetStatus: string) {
+		// Валидация JSON-полей перед записью; храним разобранный объект (настоящий jsonb)
+		for (const col of columns) {
+			if (col.type !== 'jsonb') continue;
+			const raw = recordData[col.name];
+			if (raw == null || String(raw).trim() === '') {
+				recordData[col.name] = null;
+				continue;
+			}
+			try {
+				recordData[col.name] = JSON.parse(String(raw));
+			} catch {
+				alert(`Поле "${col.title}": некорректный JSON. Сохранение отменено.`);
+				return;
+			}
+		}
+
+		// Валидация полей «Момент рождения»: если заполнено хоть что-то — требуется дата и время
+		for (const col of columns) {
+			if (col.type !== 'birth') continue;
+			const raw = recordData[col.name];
+			if (!raw || typeof raw !== 'object') continue;
+			const hasAny =
+				raw.local || raw.place || raw.lat != null || raw.lon != null || raw.tz !== '+03:00';
+			if (!hasAny) continue;
+			if (!isValidBirthLocal(raw.local)) {
+				alert(`Поле "${col.title}": заполните дату и время рождения. Сохранение отменено.`);
+				return;
+			}
+		}
+
 		backupActiveLines();
 
 		const cleanData: Record<string, any> = {};
@@ -241,13 +276,60 @@
 				recordStatus = 'draft';
 				await saveToDb('draft');
 				break;
+			case 'delete':
+				await handleDelete();
+				break;
 			case 'copy':
 				await handleCopy();
 				break;
 			case 'print':
 				printerService.printRecords(tableId, [recordId]);
 				break;
+			case 'run':
+				await handleRun();
+				break;
 		}
+	}
+
+	// ▶️ Выполнить: запуск пользовательского JS-кода по текущей записи
+	async function handleRun() {
+		if (recordId === 'new') return alert('Сначала сохраните запись');
+		const code = tableMeta?.config?.runCode;
+		if (!code?.trim())
+			return alert('Код действия не задан. Откройте конфигуратор таблицы → «Выполнить (JS-код)».');
+		const record = await db.data_records.get(recordId);
+		if (!record) return alert('Запись не найдена');
+		const lines = await db.data_lines.where('record_id').equals(recordId).toArray();
+		try {
+			await runActionCode(code, {
+				record,
+				records: [record],
+				lines,
+				db,
+				supabase,
+				save: saveRecordWithLines,
+				log: (...args) => console.log('[Выполнить]', ...args)
+			});
+			const updated = await db.data_records.get(recordId);
+			if (updated) {
+				recordData = { ...(updated.data ?? {}) };
+			}
+			workspace.setDirty(tabId, false);
+		} catch (e: any) {
+			alert(`Ошибка выполнения кода: ${e?.message ?? e}`);
+		}
+	}
+
+	async function handleDelete() {
+		if (recordId === 'new') return;
+		if (!confirm('Безвозвратно удалить запись?')) return;
+		try {
+			await physicalDeleteRecords([recordId]);
+		} catch (e: any) {
+			alert(`Ошибка удаления: ${e?.message ?? e}`);
+			return;
+		}
+		workspace.closeTabForce(tabId);
 	}
 
 	async function handleCopy() {

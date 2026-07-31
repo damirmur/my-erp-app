@@ -1,4 +1,6 @@
 import type { TableTypeModule, StatusDef, ActionDef, ActionDefDB, TableTypeFeatures } from './type';
+import { FEATURE_KEYS } from './type';
+import { standardActionsFor } from './standardActions';
 import type { LocalTable, TableConfig } from '$lib/db/indexeddb';
 import { supabase } from '$lib/db/supabase';
 import { derived, get } from 'svelte/store';
@@ -12,6 +14,7 @@ import tabular from './tabular';
 export type { TableTypeModule, StatusDef, ActionDef };
 export type { TableConfig };
 export { dynamicTypes };
+export { FEATURE_KEYS, FEATURE_LABELS } from './type';
 
 const builtinRegistry: Record<string, TableTypeModule> = {
 	directory,
@@ -41,16 +44,25 @@ export async function syncTableTypes() {
 	const loaded: Record<string, TableTypeModule> = {};
 	for (const row of data) {
 		const def = row.definition as any;
+		// Недостающие ключи фич подставляем как false (без вывода из действий)
+		const defaults: TableTypeFeatures = {
+			create: false,
+			save: false,
+			post: false,
+			copy: false,
+			print: false,
+			massOperations: false,
+			hierarchy: false,
+			tabularSections: false,
+			delete: false,
+			run: false
+		};
 		loaded[row.name] = {
 			type: row.name,
 			label: row.label,
-			statuses: def.statuses ?? [],
-			features: (def.features ?? {
-				hierarchy: false,
-				copy: false,
-				print: false,
-				tabularSections: false
-			}) as TableTypeFeatures,
+			statuses: (def.statuses ?? []) as StatusDef[],
+			features: { ...defaults, ...(def.features ?? {}) },
+			// Явные действия строки — кастомные кнопки и переопределения стандартных
 			actions: (def.actions ?? []).map((a: ActionDefDB) => ({
 				...a,
 				show: a.showWhen
@@ -76,25 +88,40 @@ export function isReadOnly(type: string, status: string, config?: Record<string,
 	return getStatusDef(type, status)?.isReadOnly ?? false;
 }
 
-export function getEffectiveConfig(table: LocalTable): TableConfig {
-	const typeDef = getTableType(table.type);
-	const c = table.config ?? {};
+export function getEffectiveConfig(
+	table: LocalTable | null
+): TableConfig & { features: TableTypeFeatures } {
+	const typeDef = getTableType(table?.type ?? 'document');
+	const c = table?.config ?? {};
+	const features = Object.fromEntries(
+		FEATURE_KEYS.map((k) => [k, c.features?.[k] ?? typeDef.features[k]])
+	) as unknown as TableTypeFeatures;
 	return {
-		features: {
-			hierarchy: c.features?.hierarchy ?? typeDef.features.hierarchy,
-			copy: c.features?.copy ?? typeDef.features.copy,
-			print: c.features?.print ?? typeDef.features.print,
-			tabularSections: c.features?.tabularSections ?? typeDef.features.tabularSections
-		},
+		features,
 		hiddenActions: c.hiddenActions ?? [],
 		statusReadOnly: c.statusReadOnly ?? {},
 		periodic: c.periodic ?? false
 	};
 }
 
+// Итоговый список кнопок: стандартные из фич + кастомные/переопределения из модуля типа.
+// Переопределение: действие с тем же id и mode в module.actions заменяет стандартное.
 export function getActions(type: string, mode: string, config?: Record<string, any>): ActionDef[] {
+	const typeDef = getTableType(type);
 	const hide = config?.hiddenActions ?? [];
-	return getTableType(type).actions.filter((a) => a.type === mode && !hide.includes(a.id));
+	const c = config ?? {};
+	// Эффективные фичи: переопределения конкретной таблицы поверх фич типа
+	const features = Object.fromEntries(
+		FEATURE_KEYS.map((k) => [k, c.features?.[k] ?? typeDef.features[k]])
+	) as TableTypeFeatures;
+	const byKey = new Map<string, ActionDef>();
+	for (const a of standardActionsFor(typeDef, features)) {
+		byKey.set(`${a.id}|${a.type}`, a);
+	}
+	for (const a of typeDef.actions) {
+		byKey.set(`${a.id}|${a.type}`, a);
+	}
+	return [...byKey.values()].filter((a) => a.type === mode && !hide.includes(a.id));
 }
 
 // upsert в PostgREST (ON CONFLICT DO UPDATE) при включённом RLS отбивает 42501,

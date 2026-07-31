@@ -3,7 +3,11 @@
 	import { workspace } from '$lib/state/workspace.svelte';
 	import { numberService } from '$lib/services/numbers';
 	import { printerService } from '$lib/services/printer';
-	import { getTableType } from '$lib/table-types';
+	import { getTableType, getEffectiveConfig } from '$lib/table-types';
+	import { formatFieldValue } from '$lib/fields';
+	import { physicalDeleteRecords } from '$lib/services/records';
+	import { runActionCode, saveRecordWithLines } from '$lib/services/actionRunner';
+	import { supabase } from '$lib/db/supabase';
 	import { liveQuery } from 'dexie';
 	import Toolbar from './Toolbar.svelte';
 
@@ -22,9 +26,7 @@
 
 	let tableType = $derived(tableMeta?.type ?? 'document');
 	let tableTypeDef = $derived(getTableType(tableType));
-	let isHierarchical = $derived(
-		tableMeta?.config?.features?.hierarchy ?? tableTypeDef.features.hierarchy
-	);
+	let isHierarchical = $derived(getEffectiveConfig(tableMeta).features.hierarchy);
 
 	// Для констант: автоматически создаём единственную запись и открываем её форму.
 	// Подавление повторного открытия живёт в workspace (переживает перемонтирование списка).
@@ -143,11 +145,20 @@
 			case 'massRestore':
 				await handleMassRestore();
 				break;
+			case 'purgeMarked':
+				await handlePurgeMarked();
+				break;
+			case 'delete':
+				await handleDeleteSelected();
+				break;
 			case 'copy':
 				await handleCopy();
 				break;
 			case 'print':
 				handleListPrint();
+				break;
+			case 'run':
+				await handleRun();
 				break;
 		}
 	}
@@ -260,12 +271,65 @@
 		selectedIds = [];
 	}
 
+	// Безвозвратное удаление записей, помеченных на удаление (как «Удаление помеченных объектов» в 1С)
+	async function handlePurgeMarked() {
+		const deletedStatus = tableTypeDef.statuses.find((s) => s.role === 'deleted')?.value;
+		if (!deletedStatus) return;
+		const marked = records.filter((r) => r.status === deletedStatus);
+		if (marked.length === 0) return alert('Нет записей, помеченных на удаление');
+		if (!confirm(`Безвозвратно удалить ${marked.length} записей?`)) return;
+		try {
+			await physicalDeleteRecords(marked.map((r) => r.id));
+		} catch (e: any) {
+			alert(`Ошибка удаления: ${e?.message ?? e}`);
+			return;
+		}
+		for (const r of marked) workspace.closeTabForce(`form_${tableId}_${r.id}`);
+		selectedIds = [];
+	}
+
+	// Физическое удаление выбранных записей (без пометки) — для типов с фичей delete
+	async function handleDeleteSelected() {
+		if (selectedIds.length === 0) return alert('Выберите строки');
+		if (!confirm(`Безвозвратно удалить ${selectedIds.length} записей?`)) return;
+		try {
+			await physicalDeleteRecords(selectedIds);
+		} catch (e: any) {
+			alert(`Ошибка удаления: ${e?.message ?? e}`);
+			return;
+		}
+		for (const id of selectedIds) workspace.closeTabForce(`form_${tableId}_${id}`);
+		selectedIds = [];
+	}
+
 	function handleListPrint() {
 		const cleanIds = filteredAndSortedRecords
 			.filter((r) => selectedIds.includes(r.id) && !r.is_folder)
 			.map((r) => r.id);
 		if (cleanIds.length === 0) return alert('Выберите документы для печати (папки не печатаются)');
 		printerService.printRecords(tableId, cleanIds);
+	}
+
+	// ▶️ Выполнить: запуск пользовательского JS-кода по выбранным записям
+	async function handleRun() {
+		const code = tableMeta?.config?.runCode;
+		if (!code?.trim())
+			return alert('Код действия не задан. Откройте конфигуратор таблицы → «Выполнить (JS-код)».');
+		if (selectedIds.length === 0) return alert('Выберите строки');
+		const selected = records.filter((r) => selectedIds.includes(r.id));
+		try {
+			await runActionCode(code, {
+				record: selected[0] ?? null,
+				records: selected,
+				lines: [],
+				db,
+				supabase,
+				save: saveRecordWithLines,
+				log: (...args) => console.log('[Выполнить]', ...args)
+			});
+		} catch (e: any) {
+			alert(`Ошибка выполнения кода: ${e?.message ?? e}`);
+		}
 	}
 
 	function toggleSelect(id: string) {
@@ -375,7 +439,7 @@
 								</td>
 								{#each columns as col}
 									<td onclick={() => toggleSelect(record.id)} class:bold-text={record.is_folder}>
-										{record.data[col.name] ?? ''}
+										{formatFieldValue(col.type, record.data[col.name])}
 									</td>
 								{/each}
 							</tr>

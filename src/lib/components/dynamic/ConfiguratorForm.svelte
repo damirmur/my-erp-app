@@ -3,10 +3,16 @@
 	import { metadata } from '$lib/state/metadata';
 	import { workspace } from '$lib/state/workspace.svelte';
 	import { syncService } from '$lib/services/sync';
-	import { fieldTypeList } from '$lib/fields';
+	import { fieldTypeList, fieldTypeLabel } from '$lib/fields';
 	import LinkConfig from '$lib/fields/LinkConfig.svelte';
 	import { liveQuery } from 'dexie';
-	import { getTableType, getEffectiveConfig, type TableTypeModule } from '$lib/table-types';
+	import {
+		getTableType,
+		getEffectiveConfig,
+		FEATURE_KEYS,
+		FEATURE_LABELS,
+		type TableTypeModule
+	} from '$lib/table-types';
 
 	// Вкладка конфигуратора привязана к одной таблице
 	let { tabId = '', tableId = '' } = $props();
@@ -62,7 +68,8 @@
 		hiddenActions: string[];
 		statusReadOnly: Record<string, boolean>;
 		periodic: boolean;
-	}>({ features: {}, hiddenActions: [], statusReadOnly: {}, periodic: false });
+		runCode: string;
+	}>({ features: {}, hiddenActions: [], statusReadOnly: {}, periodic: false, runCode: '' });
 	let selectedTypeDef = $state<TableTypeModule | null>(null);
 
 	// Синоним таблицы (черновик)
@@ -117,7 +124,8 @@
 			features: { ...effective.features },
 			hiddenActions: [...(effective.hiddenActions ?? [])],
 			statusReadOnly: { ...(effective.statusReadOnly ?? {}) },
-			periodic: effective.periodic ?? false
+			periodic: effective.periodic ?? false,
+			runCode: selectedTableMeta.config?.runCode ?? ''
 		};
 
 		const cols = await db.meta_columns
@@ -435,7 +443,7 @@
 							<tr class:editing-row={editingColKey === col.key}>
 								<td>{col.name}</td>
 								<td>{col.title}</td>
-								<td>{col.type}</td>
+								<td>{fieldTypeLabel(col.type)}</td>
 								<td class="text-center">
 									<button
 										onclick={() => handleEditColumn('main', col)}
@@ -490,38 +498,16 @@
 				{#if selectedTypeDef}
 					<div class="config-section">
 						<div class="config-grid">
-							<label class="cfg-check">
-								<input
-									type="checkbox"
-									bind:checked={editConfig.features.hierarchy}
-									onchange={markDirty}
-								/>
-								Иерархия (группы/папки)
-							</label>
-							<label class="cfg-check">
-								<input
-									type="checkbox"
-									bind:checked={editConfig.features.copy}
-									onchange={markDirty}
-								/>
-								Копирование
-							</label>
-							<label class="cfg-check">
-								<input
-									type="checkbox"
-									bind:checked={editConfig.features.print}
-									onchange={markDirty}
-								/>
-								Печать
-							</label>
-							<label class="cfg-check">
-								<input
-									type="checkbox"
-									bind:checked={editConfig.features.tabularSections}
-									onchange={markDirty}
-								/>
-								Табличные части
-							</label>
+							{#each FEATURE_KEYS as fk}
+								<label class="cfg-check">
+									<input
+										type="checkbox"
+										bind:checked={editConfig.features[fk]}
+										onchange={markDirty}
+									/>
+									{FEATURE_LABELS[fk]}
+								</label>
+							{/each}
 						</div>
 
 						{#if selectedTypeDef.statuses.length > 1}
@@ -547,6 +533,23 @@
 									<input type="checkbox" bind:checked={editConfig.periodic} onchange={markDirty} />
 									📅 Периодическая (значения по датам, создаётся таблица «Периоды»)
 								</label>
+							</div>
+						{/if}
+
+						{#if editConfig.features.run}
+							<div class="cfg-run-code">
+								<span class="cfg-label">▶️ Код действия «Выполнить» (JS, async):</span>
+								<textarea
+									bind:value={editConfig.runCode}
+									oninput={markDirty}
+									rows="10"
+									placeholder={`// Доступно как переменные:\n// record — текущая запись {id, data, status,...}\n// records — выбранные записи\n// lines — строки ТЧ текущей записи\n// db — локальная БД (Dexie)\n// supabase — облачный клиент\n// save(record, lines?) — сохранить изменения (is_dirty=1)\n// log(...args) — вывод в консоль\n\nrecord.data.total_amount = 42;\nawait save(record);`}
+								></textarea>
+								<div class="cfg-hint">
+									Код выполняется в браузере. Пример: <code
+										>record.data.total_amount = 42; await save(record);</code
+									>
+								</div>
 							</div>
 						{/if}
 					</div>
@@ -596,7 +599,7 @@
 										<tr class:editing-row={editingColKey === col.key}>
 											<td>{col.name}</td>
 											<td>{col.title}</td>
-											<td>{col.type}</td>
+											<td>{fieldTypeLabel(col.type)}</td>
 											<td class="text-center">
 												<button
 													onclick={() => handleEditColumn(sub.key, col)}
@@ -938,5 +941,31 @@
 		color: #475569;
 		display: block;
 		margin-bottom: 4px;
+	}
+	.cfg-run-code {
+		border-top: 1px solid #e2e8f0;
+		padding-top: 8px;
+	}
+	.cfg-run-code textarea {
+		width: 100%;
+		font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+		font-size: 0.8rem;
+		line-height: 1.4;
+		padding: 8px;
+		border: 1px solid #cbd5e1;
+		border-radius: 4px;
+		box-sizing: border-box;
+		background: #f8fafc;
+		color: #1e293b;
+	}
+	.cfg-hint {
+		font-size: 0.75rem;
+		color: #64748b;
+		margin-top: 4px;
+	}
+	.cfg-hint code {
+		background: #e2e8f0;
+		padding: 1px 4px;
+		border-radius: 3px;
 	}
 </style>

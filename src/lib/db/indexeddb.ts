@@ -1,16 +1,13 @@
 import Dexie, { type Table } from 'dexie';
+import type { TableTypeFeatures } from '$lib/table-types/type';
 
 // Описываем интерфейсы для типизации TypeScript (на основе нашей SQL-схемы)
 export interface TableConfig {
-	features?: {
-		hierarchy?: boolean;
-		copy?: boolean;
-		print?: boolean;
-		tabularSections?: boolean;
-	};
+	features?: Partial<TableTypeFeatures>;
 	hiddenActions?: string[];
 	statusReadOnly?: Record<string, boolean>;
 	periodic?: boolean; // для типа constant: периодическое значение
+	runCode?: string; // JS-код действия «▶️ Выполнить» (выполняется в браузере)
 }
 
 export interface LocalTable {
@@ -28,7 +25,16 @@ export interface LocalColumn {
 	table_id: string;
 	name: string;
 	title: string;
-	type: 'string' | 'number' | 'boolean' | 'date' | 'jsonb' | 'link' | 'parent_link';
+	type:
+		| 'string'
+		| 'number'
+		| 'boolean'
+		| 'date'
+		| 'datetime'
+		| 'birth'
+		| 'jsonb'
+		| 'link'
+		| 'parent_link';
 	related_table_id?: string;
 	related_table_name?: string;
 	sort_order: number;

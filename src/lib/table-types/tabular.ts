@@ -8,12 +8,19 @@ const tabular: TableTypeModule = {
 		{ value: 'draft', label: 'Черновик', icon: '⚪', badgeClass: 'status-draft', isReadOnly: false }
 	],
 	features: {
-		hierarchy: false,
+		create: false,
+		save: true,
+		post: false,
 		copy: false,
 		print: false,
+		massOperations: false,
+		hierarchy: false,
+		delete: false,
+		run: false,
 		tabularSections: false
 	},
-	actions: [{ id: 'save', label: 'Записать', icon: '💾', type: 'form' }]
+	actions: [],
+	fields: []
 };
 
 export default tabular;

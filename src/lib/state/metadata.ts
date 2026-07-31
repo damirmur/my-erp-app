@@ -1,4 +1,5 @@
 import { supabase } from '$lib/db/supabase';
+import { db } from '$lib/db/indexeddb';
 import { getTableType } from '$lib/table-types';
 
 function slugify(text: string): string {
@@ -86,13 +87,23 @@ class MetadataManager {
 		if (error) alert(`Ошибка удаления поля: ${error.message}`);
 	}
 
-	// Каскадное удаление таблицы вместе с её табличными частями и реквизитами
+	// Каскадное удаление таблицы вместе с её табличными частями, реквизитами и данными
 	async deleteTableCascade(tableId: string) {
 		const { data: subs } = await supabase
 			.from('meta_tables')
 			.select('id')
 			.eq('parent_table_id', tableId);
 		const subIds = (subs ?? []).map((s) => s.id);
+		const allIds = [...subIds, tableId];
+
+		// Данные (записи и табличные части) удаляем до метаданных — из-за внешних ключей,
+		// а также из локального кэша, чтобы они не остались is_dirty и не сломали push
+		const { error: lineErr } = await supabase.from('data_lines').delete().in('table_id', allIds);
+		if (lineErr) alert(`Ошибка удаления строк ТЧ: ${lineErr.message}`);
+		const { error: recErr } = await supabase.from('data_records').delete().in('table_id', allIds);
+		if (recErr) alert(`Ошибка удаления данных: ${recErr.message}`);
+		await db.data_lines.where('table_id').anyOf(allIds).delete();
+		await db.data_records.where('table_id').anyOf(allIds).delete();
 
 		for (const sid of subIds) {
 			const { error } = await supabase.from('meta_columns').delete().eq('table_id', sid);
@@ -101,10 +112,7 @@ class MetadataManager {
 		const { error: colErr } = await supabase.from('meta_columns').delete().eq('table_id', tableId);
 		if (colErr) alert(`Ошибка удаления реквизитов: ${colErr.message}`);
 
-		const { error: subErr } = await supabase
-			.from('meta_tables')
-			.delete()
-			.in('id', [...subIds, tableId]);
+		const { error: subErr } = await supabase.from('meta_tables').delete().in('id', allIds);
 		if (subErr) alert(`Ошибка удаления таблицы: ${subErr.message}`);
 	}
 
@@ -142,6 +150,11 @@ class MetadataManager {
 	}
 
 	async deleteTable(tableId: string) {
+		// Удаляем и строки ТЧ таблицы (записей у подтаблиц не бывает),
+		// чтобы они не остались в локальном кэше и не сломали push
+		const { error: lineErr } = await supabase.from('data_lines').delete().eq('table_id', tableId);
+		if (lineErr) alert(`Ошибка удаления строк ТЧ: ${lineErr.message}`);
+		await db.data_lines.where('table_id').equals(tableId).delete();
 		const { error } = await supabase.from('meta_tables').delete().eq('id', tableId);
 		if (error) alert(`Ошибка удаления таблицы: ${error.message}`);
 	}

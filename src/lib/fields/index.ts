@@ -8,11 +8,11 @@ import linkField from './link';
 export type { FieldTypeModule } from './field';
 
 export const fieldRegistry: Record<string, FieldTypeModule> = {
-    string: stringField,
-    number: numberField,
-    boolean: booleanField,
-    date: dateField,
-    link: linkField
+	string: stringField,
+	number: numberField,
+	boolean: booleanField,
+	date: dateField,
+	link: linkField
 };
 
 export const fieldTypeList: FieldTypeModule[] = Object.values(fieldRegistry);

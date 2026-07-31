@@ -8,6 +8,14 @@
 <main class="workspace">
 	<!-- 1. Панель вкладок (Верхняя командная строка окон) -->
 	<div class="tabs-bar">
+		<button
+			onclick={() => workspace.toggleSidebar()}
+			class="sidebar-toggle-btn"
+			title={workspace.sidebarCollapsed ? 'Показать панель разделов' : 'Скрыть панель разделов'}
+		>
+			{workspace.sidebarCollapsed ? '▶' : '◀'}
+		</button>
+
 		{#if workspace.tabs.length === 0}
 			<div class="tabs-empty-text">Нет открытых окон. Выберите раздел слева.</div>
 		{/if}
@@ -38,11 +46,18 @@
 	<div class="workspace-content">
 		{#if workspace.activeTab}
 			{#if workspace.activeTab.tableId === 'SYSTEM_CONFIUGRATOR_ID'}
-				<ConfiguratorForm tabId={workspace.activeTab.id} />
+				<ConfiguratorForm
+					tabId={workspace.activeTab.id}
+					tableId={workspace.activeTab.recordId ?? ''}
+				/>
 			{:else if workspace.activeTab.type === 'list'}
 				<DynamicList tableId={workspace.activeTab.tableId} tabId={workspace.activeTab.id} />
 			{:else if workspace.activeTab.type === 'form'}
-				<DynamicForm tableId={workspace.activeTab.tableId} recordId={workspace.activeTab.recordId} tabId={workspace.activeTab.id} />
+				<DynamicForm
+					tableId={workspace.activeTab.tableId}
+					recordId={workspace.activeTab.recordId}
+					tabId={workspace.activeTab.id}
+				/>
 			{/if}
 		{:else}
 			<div class="empty-workspace-state">
@@ -69,6 +84,25 @@
 		display: flex;
 		align-items: center;
 		padding: 0 0.5rem;
+		gap: 4px;
+	}
+	.sidebar-toggle-btn {
+		background: none;
+		border: 1px solid #cbd5e1;
+		border-radius: 0.25rem;
+		color: #475569;
+		font-size: 0.75rem;
+		width: 28px;
+		height: 28px;
+		cursor: pointer;
+		flex-shrink: 0;
+		transition:
+			background-color 0.2s,
+			color 0.2s;
+	}
+	.sidebar-toggle-btn:hover {
+		background-color: #e2e8f0;
+		color: #1f2937;
 	}
 	.tabs-empty-text {
 		font-size: 0.85rem;

@@ -37,7 +37,7 @@
 
 	function backupActiveLines() {
 		if (activeSubTable) {
-			subTableBackup[activeSubTable.id] = activeSubTableLines.map(l => ({
+			subTableBackup[activeSubTable.id] = activeSubTableLines.map((l) => ({
 				...l,
 				data: { ...l.data }
 			}));
@@ -46,10 +46,13 @@
 
 	function restoreLinesToActive(forceEmpty = false) {
 		const sub = activeSubTable;
-		if (!sub) { activeSubTableLines = []; return; }
+		if (!sub) {
+			activeSubTableLines = [];
+			return;
+		}
 		const saved = subTableBackup[sub.id];
 		if (saved && saved.length > 0 && !forceEmpty) {
-			activeSubTableLines = saved.map(l => ({ ...l, data: { ...l.data } }));
+			activeSubTableLines = saved.map((l) => ({ ...l, data: { ...l.data } }));
 		} else {
 			activeSubTableLines = [];
 		}
@@ -85,17 +88,17 @@
 	async function loadForm() {
 		loading = true;
 
-		tableMeta = await db.meta_tables.get(tableId) ?? null;
+		tableMeta = (await db.meta_tables.get(tableId)) ?? null;
 		if (tableMeta) tableTitle = tableMeta.title;
 
 		const allTables = await db.meta_tables.toArray();
-		objectSubTables = allTables.filter(t => t.parent_table_id === tableId);
+		objectSubTables = allTables.filter((t) => t.parent_table_id === tableId);
 		columns = await db.meta_columns.where('table_id').equals(tableId).sortBy('sort_order');
 
 		const allLineRows = await db.data_lines.where('record_id').equals(recordId).toArray();
 		const newBackup: Record<string, LocalLine[]> = {};
 		for (const sub of objectSubTables) {
-			newBackup[sub.id] = allLineRows.filter(l => l.table_id === sub.id);
+			newBackup[sub.id] = allLineRows.filter((l) => l.table_id === sub.id);
 		}
 		subTableBackup = newBackup;
 
@@ -104,13 +107,14 @@
 			recordData = { ...existRecord.data };
 			recordStatus = existRecord.status;
 		} else {
-			const prefix = tableTitle.includes('Накладная') || tableTitle.includes('Реализация') ? 'РН-' : 'СП-';
+			const prefix =
+				tableTitle.includes('Накладная') || tableTitle.includes('Реализация') ? 'РН-' : 'СП-';
 			const nextNum = await numberService.getNextNumber(tableId, prefix);
 			recordData = { number: nextNum, date: new Date().toISOString().split('T')[0] };
 			recordStatus = 'draft';
 		}
 
-		columns.forEach(col => {
+		columns.forEach((col) => {
 			if (recordData[col.name] === undefined) {
 				recordData[col.name] = col.type === 'boolean' ? false : '';
 			}
@@ -122,7 +126,9 @@
 		loading = false;
 	}
 
-	function markAsDirty() { workspace.setDirty(tabId, true); }
+	function markAsDirty() {
+		workspace.setDirty(tabId, true);
+	}
 
 	async function saveToDb(targetStatus: string) {
 		backupActiveLines();
@@ -132,11 +138,14 @@
 			cleanData[key] = recordData[key];
 		}
 
-		const cleanLines: Array<{ subTableId: string; lines: Array<{ id: string; data: Record<string, any>; sort_order: number }> }> = [];
+		const cleanLines: Array<{
+			subTableId: string;
+			lines: Array<{ id: string; data: Record<string, any>; sort_order: number }>;
+		}> = [];
 		for (const [subTableId, lines] of Object.entries(subTableBackup)) {
 			cleanLines.push({
 				subTableId,
-				lines: lines.map(line => ({
+				lines: lines.map((line) => ({
 					id: line.id,
 					data: Object.fromEntries(Object.entries(line.data)),
 					sort_order: line.sort_order || 0
@@ -146,15 +155,26 @@
 
 		await db.transaction('rw', [db.data_records, db.data_lines], async () => {
 			await db.data_records.put({
-				id: recordId, table_id: tableId, status: targetStatus as any,
-				is_folder: false, parent_id: null,
-				data: { ...cleanData, total_amount: totalAmount }, is_dirty: 1, updated_at: new Date().toISOString()
+				id: recordId,
+				table_id: tableId,
+				status: targetStatus as any,
+				is_folder: false,
+				parent_id: null,
+				data: { ...cleanData, total_amount: totalAmount },
+				is_dirty: 1,
+				updated_at: new Date().toISOString()
 			});
 
 			await db.data_lines.where('record_id').equals(recordId).delete();
 			for (const { subTableId, lines } of cleanLines) {
 				for (const line of lines) {
-					await db.data_lines.put({ id: line.id, record_id: recordId, table_id: subTableId, data: line.data, sort_order: line.sort_order });
+					await db.data_lines.put({
+						id: line.id,
+						record_id: recordId,
+						table_id: subTableId,
+						data: line.data,
+						sort_order: line.sort_order
+					});
 				}
 			}
 		});
@@ -166,13 +186,32 @@
 
 	async function handleAction(actionId: string) {
 		switch (actionId) {
-			case 'save': await saveToDb('draft'); break;
-			case 'post': recordStatus = 'posted'; await saveToDb('posted'); break;
-			case 'unpost': recordStatus = 'draft'; await saveToDb('draft'); workspace.setDirty(tabId, true); break;
-			case 'markDelete': recordStatus = 'marked_for_deletion'; await saveToDb('marked_for_deletion'); break;
-			case 'unmarkDelete': recordStatus = 'draft'; await saveToDb('draft'); break;
-			case 'copy': await handleCopy(); break;
-			case 'print': printerService.printRecords(tableId, [recordId]); break;
+			case 'save':
+				await saveToDb('draft');
+				break;
+			case 'post':
+				recordStatus = 'posted';
+				await saveToDb('posted');
+				break;
+			case 'unpost':
+				recordStatus = 'draft';
+				await saveToDb('draft');
+				workspace.setDirty(tabId, true);
+				break;
+			case 'markDelete':
+				recordStatus = 'marked_for_deletion';
+				await saveToDb('marked_for_deletion');
+				break;
+			case 'unmarkDelete':
+				recordStatus = 'draft';
+				await saveToDb('draft');
+				break;
+			case 'copy':
+				await handleCopy();
+				break;
+			case 'print':
+				printerService.printRecords(tableId, [recordId]);
+				break;
 		}
 	}
 
@@ -184,11 +223,14 @@
 		for (const key of Object.keys(recordData)) {
 			cleanData[key] = recordData[key];
 		}
-		const cleanLines: Array<{ subTableId: string; lines: Array<{ id: string; data: Record<string, any>; sort_order: number }> }> = [];
+		const cleanLines: Array<{
+			subTableId: string;
+			lines: Array<{ id: string; data: Record<string, any>; sort_order: number }>;
+		}> = [];
 		for (const [subTableId, lines] of Object.entries(subTableBackup)) {
 			cleanLines.push({
 				subTableId,
-				lines: lines.map(line => ({
+				lines: lines.map((line) => ({
 					id: line.id,
 					data: Object.fromEntries(Object.entries(line.data)),
 					sort_order: line.sort_order || 0
@@ -196,15 +238,35 @@
 			});
 		}
 
-		const prefix = tableTitle.includes('Накладная') || tableTitle.includes('Реализация') ? 'РН-' : 'СП-';
+		const prefix =
+			tableTitle.includes('Накладная') || tableTitle.includes('Реализация') ? 'РН-' : 'СП-';
 		const nextFreeNumber = await numberService.getNextNumber(tableId, prefix);
-		const newRecordData = { ...cleanData, number: nextFreeNumber, date: new Date().toISOString().split('T')[0] };
+		const newRecordData = {
+			...cleanData,
+			number: nextFreeNumber,
+			date: new Date().toISOString().split('T')[0]
+		};
 
 		await db.transaction('rw', [db.data_records, db.data_lines], async () => {
-			await db.data_records.put({ id: newRecordId, table_id: tableId, status: 'draft', is_folder: false, parent_id: null, data: newRecordData, is_dirty: 1, updated_at: new Date().toISOString() });
+			await db.data_records.put({
+				id: newRecordId,
+				table_id: tableId,
+				status: 'draft',
+				is_folder: false,
+				parent_id: null,
+				data: newRecordData,
+				is_dirty: 1,
+				updated_at: new Date().toISOString()
+			});
 			for (const { subTableId, lines } of cleanLines) {
 				for (const line of lines) {
-					await db.data_lines.put({ id: crypto.randomUUID(), record_id: newRecordId, table_id: subTableId, data: line.data, sort_order: line.sort_order });
+					await db.data_lines.put({
+						id: crypto.randomUUID(),
+						record_id: newRecordId,
+						table_id: subTableId,
+						data: line.data,
+						sort_order: line.sort_order
+					});
 				}
 			}
 		});
@@ -212,7 +274,10 @@
 		workspace.openForm(tableId, newRecordId, tableTitle, nextFreeNumber);
 	}
 
-	$effect(() => { recordId; loadForm(); });
+	$effect(() => {
+		recordId;
+		loadForm();
+	});
 </script>
 
 <div class="form-container">
@@ -228,7 +293,12 @@
 					<div class="form-field">
 						<label for={col.id}>{col.title}</label>
 						{#if FC}
-							<FC bind:value={recordData[col.name]} disabled={readOnly} onChange={markAsDirty} relatedTableId={col.related_table_id ?? ''} />
+							<FC
+								bind:value={recordData[col.name]}
+								disabled={readOnly}
+								onChange={markAsDirty}
+								relatedTableId={col.related_table_id ?? ''}
+							/>
 						{/if}
 					</div>
 				{/each}
@@ -249,7 +319,12 @@
 					</div>
 					{#if activeSubTable}
 						<div class="sub-tab-content">
-							<TabularSection bind:lines={activeSubTableLines} onChange={markAsDirty} readOnly={readOnly} tableId={activeSubTable.id} />
+							<TabularSection
+								bind:lines={activeSubTableLines}
+								onChange={markAsDirty}
+								{readOnly}
+								tableId={activeSubTable.id}
+							/>
 						</div>
 					{/if}
 				</div>
@@ -267,15 +342,71 @@
 </div>
 
 <style>
-	.form-container { display: flex; flex-direction: column; height: 100%; background: #ffffff; }
-	.form-body { flex: 1; padding: 1rem; overflow-y: auto; }
-	.form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-bottom: 1.5rem; }
-	.form-field { display: flex; flex-direction: column; gap: 4px; }
-	.form-field label { font-size: 0.8rem; font-weight: 500; color: #475569; }
-	.sub-tabs-wrapper { margin-top: 1.5rem; border-top: 1px solid #e2e8f0; }
-	.sub-tabs-header { display: flex; gap: 2px; background: #f8fafc; border-bottom: 1px solid #cbd5e1; }
-	.sub-tab-btn { background: none; border: none; padding: 6px 12px; font-size: 0.8rem; cursor: pointer; color: #64748b; }
-	.sub-tab-btn.active { background: #ffffff; border-bottom: 2px solid #2563eb; color: #1e3a8a; font-weight: 600; }
-	.form-footer-summary { background: #f1f5f9; border-top: 1px solid #cbd5e1; padding: 8px 16px; display: flex; justify-content: flex-end; align-items: center; gap: 24px; font-size: 0.85rem; color: #334155; }
-	.total-price span { color: #16a34a; font-size: 1.1rem; font-weight: 700; }
+	.form-container {
+		display: flex;
+		flex-direction: column;
+		height: 100%;
+		background: #ffffff;
+	}
+	.form-body {
+		flex: 1;
+		padding: 1rem;
+		overflow-y: auto;
+	}
+	.form-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+		gap: 12px;
+		margin-bottom: 1.5rem;
+	}
+	.form-field {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+	}
+	.form-field label {
+		font-size: 0.8rem;
+		font-weight: 500;
+		color: #475569;
+	}
+	.sub-tabs-wrapper {
+		margin-top: 1.5rem;
+		border-top: 1px solid #e2e8f0;
+	}
+	.sub-tabs-header {
+		display: flex;
+		gap: 2px;
+		background: #f8fafc;
+		border-bottom: 1px solid #cbd5e1;
+	}
+	.sub-tab-btn {
+		background: none;
+		border: none;
+		padding: 6px 12px;
+		font-size: 0.8rem;
+		cursor: pointer;
+		color: #64748b;
+	}
+	.sub-tab-btn.active {
+		background: #ffffff;
+		border-bottom: 2px solid #2563eb;
+		color: #1e3a8a;
+		font-weight: 600;
+	}
+	.form-footer-summary {
+		background: #f1f5f9;
+		border-top: 1px solid #cbd5e1;
+		padding: 8px 16px;
+		display: flex;
+		justify-content: flex-end;
+		align-items: center;
+		gap: 24px;
+		font-size: 0.85rem;
+		color: #334155;
+	}
+	.total-price span {
+		color: #16a34a;
+		font-size: 1.1rem;
+		font-weight: 700;
+	}
 </style>

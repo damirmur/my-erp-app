@@ -1,113 +1,167 @@
 // Описываем интерфейс вкладки нашей ERP-системы
 export interface WorkspaceTab {
-    id: string;          // Уникальный ID вкладки (например, "list_goods" или "form_invoice_uuid")
-    type: 'list' | 'form'; // Тип вкладки: Список элементов или Форма документа/справочника
-    tableId: string;     // ID таблицы метаданных (ссылка на meta_tables.id)
-    recordId?: string;   // ID конкретной записи (только для форм)
-    title: string;       // Заголовок вкладки (например, "Товары (список)" или "Накладная №5")
-    isDirty: boolean;    // Флаг измененности (есть ли несохраненные данные, аналог "*" в 1С)
+	id: string; // Уникальный ID вкладки (например, "list_goods" или "form_invoice_uuid")
+	type: 'list' | 'form'; // Тип вкладки: Список элементов или Форма документа/справочника
+	tableId: string; // ID таблицы метаданных (ссылка на meta_tables.id)
+	recordId?: string; // ID конкретной записи (только для форм)
+	title: string; // Заголовок вкладки (например, "Товары (список)" или "Накладная №5")
+	isDirty: boolean; // Флаг измененности (есть ли несохраненные данные, аналог "*" в 1С)
 }
 
 class WorkspaceManager {
-    // Используем руны Svelte 5 для создания глубоко реактивного состояния
-    tabs = $state<WorkspaceTab[]>([]);
-    activeTabId = $state<string | null>(null);
+	// Используем руны Svelte 5 для создания глубоко реактивного состояния
+	tabs = $state<WorkspaceTab[]>([]);
+	activeTabId = $state<string | null>(null);
+	sidebarCollapsed = $state(false);
+	mode = $state<'main' | 'constructor'>('main');
 
-    // Вычисляемое свойство через руну $derived: возвращает объект текущего активного таба
-    activeTab = $derived(this.tabs.find(t => t.id === this.activeTabId) || null);
+	// Вычисляемое свойство через руну $derived: возвращает объект текущего активного таба
+	activeTab = $derived(this.tabs.find((t) => t.id === this.activeTabId) || null);
 
-    // 1. Открыть форму списка таблицы (аналог ФормыСписка в 1С)
-    openList(tableId: string, tableTitle: string) {
-        const tabId = `list_${tableId}`;
-        
-        // Если вкладка со списком уже открыта, просто переключаемся на неё
-        const existingTab = this.tabs.find(t => t.id === tabId);
-        if (existingTab) {
-            this.activeTabId = tabId;
-            return;
-        }
+	// 1. Открыть форму списка таблицы (аналог ФормыСписка в 1С)
+	openList(tableId: string, tableTitle: string) {
+		const tabId = `list_${tableId}`;
 
-        // Иначе добавляем новую вкладку в массив
-        this.tabs.push({
-            id: tabId,
-            type: 'list',
-            tableId,
-            title: `${tableTitle} (список)`,
-            isDirty: false
-        });
-        this.activeTabId = tabId;
-    }
+		// Если вкладка со списком уже открыта, просто переключаемся на неё
+		const existingTab = this.tabs.find((t) => t.id === tabId);
+		if (existingTab) {
+			this.activeTabId = tabId;
+			return;
+		}
 
-    // 2. Открыть форму элемента/документа (аналог ФормыЭлемента/ФормыДокумента в 1С)
-    openForm(tableId: string, recordId: string | 'new', tableTitle: string, recordNumber?: string) {
-        // Если это новый элемент, генерируем временный ID для вкладки
-        const actualRecordId = recordId === 'new' ? crypto.randomUUID() : recordId;
-        const tabId = `form_${tableId}_${actualRecordId}`;
+		// Иначе добавляем новую вкладку в массив
+		this.tabs.push({
+			id: tabId,
+			type: 'list',
+			tableId,
+			title: `${tableTitle} (список)`,
+			isDirty: false
+		});
+		this.activeTabId = tabId;
+	}
 
-        const existingTab = this.tabs.find(t => t.id === tabId);
-        if (existingTab) {
-            this.activeTabId = tabId;
-            return;
-        }
+	// 2. Открыть форму элемента/документа (аналог ФормыЭлемента/ФормыДокумента в 1С)
+	openForm(tableId: string, recordId: string | 'new', tableTitle: string, recordNumber?: string) {
+		// Если это новый элемент, генерируем временный ID для вкладки
+		const actualRecordId = recordId === 'new' ? crypto.randomUUID() : recordId;
+		const tabId = `form_${tableId}_${actualRecordId}`;
 
-        const title = recordId === 'new' 
-            ? `Новый ${tableTitle}` 
-            : `${tableTitle} №${recordNumber || '...'}`;
+		const existingTab = this.tabs.find((t) => t.id === tabId);
+		if (existingTab) {
+			this.activeTabId = tabId;
+			return;
+		}
 
-        this.tabs.push({
-            id: tabId,
-            type: 'form',
-            tableId,
-            recordId: actualRecordId,
-            title,
-            isDirty: recordId === 'new' // Новая запись сразу считается измененной
-        });
-        this.activeTabId = tabId;
-    }
+		const title =
+			recordId === 'new' ? `Новый ${tableTitle}` : `${tableTitle} №${recordNumber || '...'}`;
 
-    // 3. Закрыть вкладку (с проверкой на модифицированность данных)
-    closeTab(tabId: string) {
-        const tabIndex = this.tabs.findIndex(t => t.id === tabId);
-        if (tabIndex === -1) return;
+		this.tabs.push({
+			id: tabId,
+			type: 'form',
+			tableId,
+			recordId: actualRecordId,
+			title,
+			isDirty: recordId === 'new' // Новая запись сразу считается измененной
+		});
+		this.activeTabId = tabId;
+	}
 
-        const tab = this.tabs[tabIndex];
+	// 3. Закрыть вкладку (с проверкой на модифицированность данных)
+	closeTab(tabId: string) {
+		const tabIndex = this.tabs.findIndex((t) => t.id === tabId);
+		if (tabIndex === -1) return;
 
-        // Имитируем поведение 1С: предупреждаем пользователя о несохраненных данных
-        if (tab.isDirty) {
-            const confirmClose = confirm(`Данные во вкладке "${tab.title}" были изменены. Закрыть без сохранения?`);
-            if (!confirmClose) return;
-        }
+		const tab = this.tabs[tabIndex];
 
-        // Удаляем вкладку из массива (мутации массивов во Svelte 5 триггерят реактивность автоматически)
-        this.tabs.splice(tabIndex, 1);
+		// Имитируем поведение 1С: предупреждаем пользователя о несохраненных данных
+		if (tab.isDirty) {
+			const confirmClose = confirm(
+				`Данные во вкладке "${tab.title}" были изменены. Закрыть без сохранения?`
+			);
+			if (!confirmClose) return;
+		}
 
-        // Если закрыли активную вкладку, переключаем фокус на соседнюю
-        if (this.activeTabId === tabId) {
-            if (this.tabs.length > 0) {
-                // Фокус на предыдущую или первую оставшуюся вкладку
-                const nextActiveIndex = Math.max(0, tabIndex - 1);
-                this.activeTabId = this.tabs[nextActiveIndex].id;
-            } else {
-                this.activeTabId = null;
-            }
-        }
-    }
+		// Удаляем вкладку из массива (мутации массивов во Svelte 5 триггерят реактивность автоматически)
+		this.tabs.splice(tabIndex, 1);
 
-    // 4. Установить флаг модифицированности (вызывается при вводе данных в инпуты)
-    setDirty(tabId: string, isDirty: boolean) {
-        const tab = this.tabs.find(t => t.id === tabId);
-        if (tab) {
-            tab.isDirty = isDirty;
-        }
-    }
+		// Если закрыли активную вкладку, переключаем фокус на соседнюю
+		if (this.activeTabId === tabId) {
+			if (this.tabs.length > 0) {
+				// Фокус на предыдущую или первую оставшуюся вкладку
+				const nextActiveIndex = Math.max(0, tabIndex - 1);
+				this.activeTabId = this.tabs[nextActiveIndex].id;
+			} else {
+				this.activeTabId = null;
+			}
+		}
+	}
 
-    // 5. Обновить заголовок вкладки (например, когда документ записали и он получил номер)
-    updateTabTitle(tabId: string, newTitle: string) {
-        const tab = this.tabs.find(t => t.id === tabId);
-        if (tab) {
-            tab.title = newTitle;
-        }
-    }
+	// 4. Скрыть/показать боковую панель
+	toggleSidebar() {
+		this.sidebarCollapsed = !this.sidebarCollapsed;
+	}
+
+	// 5. Переключить режим интерфейса: основной или конструктор
+	setMode(mode: 'main' | 'constructor') {
+		this.mode = mode;
+	}
+
+	// 6. Открыть конфигуратор таблицы в отдельной вкладке (одна таблица — одна вкладка)
+	openConfigurator(tableId: string, tableTitle: string) {
+		const tabId = `form_SYSTEM_CONFIUGRATOR_ID_${tableId}`;
+
+		const existingTab = this.tabs.find((t) => t.id === tabId);
+		if (existingTab) {
+			this.activeTabId = tabId;
+			return;
+		}
+
+		this.tabs.push({
+			id: tabId,
+			type: 'form',
+			tableId: 'SYSTEM_CONFIUGRATOR_ID',
+			recordId: tableId,
+			title: `⚙️ ${tableTitle}`,
+			isDirty: false
+		});
+		this.activeTabId = tabId;
+	}
+
+	// 7. Принудительно закрыть вкладку без подтверждения (например, после удаления таблицы)
+	closeTabForce(tabId: string) {
+		const tabIndex = this.tabs.findIndex((t) => t.id === tabId);
+		if (tabIndex === -1) return;
+		this.tabs.splice(tabIndex, 1);
+		if (this.activeTabId === tabId) {
+			if (this.tabs.length > 0) {
+				const nextActiveIndex = Math.max(0, tabIndex - 1);
+				this.activeTabId = this.tabs[nextActiveIndex].id;
+			} else {
+				this.activeTabId = null;
+			}
+		}
+	}
+
+	// 8. Закрыть вкладку конфигуратора конкретной таблицы
+	closeConfiguratorForTable(tableId: string) {
+		this.closeTabForce(`form_SYSTEM_CONFIUGRATOR_ID_${tableId}`);
+	}
+
+	// 9. Установить флаг модифицированности (вызывается при вводе данных в инпуты)
+	setDirty(tabId: string, isDirty: boolean) {
+		const tab = this.tabs.find((t) => t.id === tabId);
+		if (tab) {
+			tab.isDirty = isDirty;
+		}
+	}
+
+	// 10. Обновить заголовок вкладки (например, когда документ записали и он получил номер)
+	updateTabTitle(tabId: string, newTitle: string) {
+		const tab = this.tabs.find((t) => t.id === tabId);
+		if (tab) {
+			tab.title = newTitle;
+		}
+	}
 }
 
 // Экспортируем единственный экземпляр (синглтон) нашего менеджера для всего приложения

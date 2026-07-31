@@ -8,7 +8,7 @@
 	$effect(() => {
 		syncTableTypes();
 		syncService.runFullSync();
-		
+
 		// Опционально: можно настроить ежеминутный фоновый обмен
 		const interval = setInterval(() => syncService.runFullSync(), 60000);
 		return () => clearInterval(interval);
@@ -21,7 +21,20 @@
 </div>
 
 <style>
-	:global(body) { margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; overflow: hidden; }
-	.app-layout { display: flex; width: 100vw; height: 100vh; overflow: hidden; }
+	:global(body) {
+		margin: 0;
+		padding: 0;
+		font-family:
+			system-ui,
+			-apple-system,
+			sans-serif;
+		overflow: hidden;
+	}
+	.app-layout {
+		position: relative;
+		display: flex;
+		width: 100vw;
+		height: 100vh;
+		overflow: hidden;
+	}
 </style>
-

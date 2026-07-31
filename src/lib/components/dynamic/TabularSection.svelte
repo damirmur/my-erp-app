@@ -8,9 +8,13 @@
 
 	$effect(() => {
 		if (!tableId) return;
-		db.meta_columns.where('table_id').equals(tableId).toArray().then(cols => {
-			linkColumn = cols.find(c => c.type === 'link') ?? null;
-		});
+		db.meta_columns
+			.where('table_id')
+			.equals(tableId)
+			.toArray()
+			.then((cols) => {
+				linkColumn = cols.find((c) => c.type === 'link') ?? null;
+			});
 	});
 
 	function addLine() {

@@ -4,14 +4,14 @@ Low-code ERP system built with Svelte 5 + SvelteKit 2. Offline-first via Dexie/I
 
 ## Commands
 
-| Command | Purpose |
-|---------|---------|
-| `npm run dev` | Dev server at `http://10.66.66.9:5173` |
-| `npm run build` | Production build |
-| `npm run check` | Type-check only (`svelte-check`) |
-| `npm run lint` | Prettier format check |
-| `npm run format` | Prettier auto-format |
-| `npm run prepare` | Run `svelte-kit sync` after install |
+| Command           | Purpose                                |
+| ----------------- | -------------------------------------- |
+| `npm run dev`     | Dev server at `http://10.66.66.9:5173` |
+| `npm run build`   | Production build                       |
+| `npm run check`   | Type-check only (`svelte-check`)       |
+| `npm run lint`    | Prettier format check                  |
+| `npm run format`  | Prettier auto-format                   |
+| `npm run prepare` | Run `svelte-kit sync` after install    |
 
 Run `npm run check` before committing. No test suite exists.
 

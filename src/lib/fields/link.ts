@@ -4,7 +4,7 @@ import LinkField from './LinkField.svelte';
 
 const linkField: FieldTypeModule = {
 	type: 'link',
-	label: 'Ссылка на справочник',
+	label: 'Ссылка',
 	defaults: {},
 	Configurator: LinkConfig,
 	FormField: LinkField

@@ -659,8 +659,10 @@
 	.tree-toggle.hidden {
 		visibility: hidden;
 	}
-	.tree-subs {
-		padding-left: 16px;
+	.sidebar-nav ul.tree-subs {
+		margin-left: 9px;
+		padding-left: 12px;
+		border-left: 1px solid #e2e8f0;
 	}
 	.tree-sub-row {
 		display: flex;

@@ -130,17 +130,17 @@ Each table type defines its own:
 
 `standardActionsFor(typeDef, features)` generates standard buttons from feature flags. It is the single source of truth:
 
-| Feature           | Buttons generated                                                              |
-| ----------------- | ------------------------------------------------------------------------------ |
-| `create`          | ➕ Создать (list)                                                              |
-| `hierarchy`       | 📁 Создать группу, ⬆️ На уровень вверх (list)                                  |
-| `save`            | 💾 Записать (form, disabled when read-only)                                    |
-| `post`            | ✔️ Провести / ↩️ Отменить проведение (form), ✔️ Провести выбранные (list)      |
-| `massOperations`  | ❌ Пометить на удаление, ↩️ Восстановить (list)                                 |
-| `massOperations` + status role `deleted` | 🗑️ Удалить помеченные (list — purge of `marked_for_deletion` records) |
-| `copy` / `print`  | 📋 Копировать / 🖨️ Печать (list + form)                                        |
-| `delete`          | 🗑️ Удалить (list + form, physical delete without marking)                      |
-| `run`             | ▶️ Выполнить (list + form, runs `config.runCode`)                              |
+| Feature                                  | Buttons generated                                                         |
+| ---------------------------------------- | ------------------------------------------------------------------------- |
+| `create`                                 | ➕ Создать (list)                                                         |
+| `hierarchy`                              | 📁 Создать группу, ⬆️ На уровень вверх (list)                             |
+| `save`                                   | 💾 Записать (form, disabled when read-only)                               |
+| `post`                                   | ✔️ Провести / ↩️ Отменить проведение (form), ✔️ Провести выбранные (list) |
+| `massOperations`                         | ❌ Пометить на удаление, ↩️ Восстановить (list)                           |
+| `massOperations` + status role `deleted` | 🗑️ Удалить помеченные (list — purge of `marked_for_deletion` records)     |
+| `copy` / `print`                         | 📋 Копировать / 🖨️ Печать (list + form)                                   |
+| `delete`                                 | 🗑️ Удалить (list + form, physical delete without marking)                 |
+| `run`                                    | ▶️ Выполнить (list + form, runs `config.runCode`)                         |
 
 `markDelete`/`unmarkDelete` (❌/↩️ in form) appear when statuses contain role `deleted` (1C-style mark for deletion).
 
@@ -187,16 +187,16 @@ Runtime `ActionDef` uses function predicates: `show?: (status) => boolean`. DB s
 
 ## Field Types System
 
-| Module    | type        | label           | FormField                        | Configurator                     |
-| --------- | ----------- | --------------- | -------------------------------- | -------------------------------- |
-| string    | `'string'`  | Строка          | `<input type="text">`            | —                                |
-| number    | `'number'`  | Число           | `<input type="number">`          | —                                |
-| boolean   | `'boolean'` | Булево          | `<input type="checkbox">`        | —                                |
-| date      | `'date'`    | Дата            | `<input type="date">`            | —                                |
-| datetime  | `'datetime'`| Дата и время    | DateTimeField                    | —                                |
-| birth     | `'birth'`   | День рождения   | BirthField (date + timezone)     | —                                |
-| jsonb     | `'jsonb'`   | JSON            | JsonField (textarea + parse)     | —                                |
-| link      | `'link'`    | Ссылка          | LookupInput wrapper              | LinkConfig (select target table) |
+| Module   | type         | label         | FormField                    | Configurator                     |
+| -------- | ------------ | ------------- | ---------------------------- | -------------------------------- |
+| string   | `'string'`   | Строка        | `<input type="text">`        | —                                |
+| number   | `'number'`   | Число         | `<input type="number">`      | —                                |
+| boolean  | `'boolean'`  | Булево        | `<input type="checkbox">`    | —                                |
+| date     | `'date'`     | Дата          | `<input type="date">`        | —                                |
+| datetime | `'datetime'` | Дата и время  | DateTimeField                | —                                |
+| birth    | `'birth'`    | День рождения | BirthField (date + timezone) | —                                |
+| jsonb    | `'jsonb'`    | JSON          | JsonField (textarea + parse) | —                                |
+| link     | `'link'`     | Ссылка        | LookupInput wrapper          | LinkConfig (select target table) |
 
 **Note**: DynamicForm resolves fields dynamically via `{@const FC = fieldRegistry[col.type]?.FormField}` — adding a new field type module to the registry is sufficient; no DynamicForm edits required.
 

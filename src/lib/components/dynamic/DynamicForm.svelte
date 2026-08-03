@@ -25,6 +25,9 @@
 	let activeSubTabIndex = $state<number>(0);
 	let loading = $state(true);
 
+	// Типы полей, у которых метка всегда над полем (не помещаются в одну строку)
+	const wideFieldTypes = ['textarea', 'file', 'zip'];
+
 	let tableType = $derived(tableMeta?.type ?? 'document');
 	let tableConfig = $derived(tableMeta?.config ?? {});
 	let readOnly = $derived(isReadOnly(tableType, recordStatus, tableConfig));
@@ -408,7 +411,7 @@
 			<div class="form-grid">
 				{#each columns as col}
 					{@const FC = fieldRegistry[col.type]?.FormField}
-					<div class="form-field">
+					<div class="form-field" class:wide={wideFieldTypes.includes(col.type)}>
 						<label for={col.id}>
 							{col.title}
 							{#if isPeriodic && col.name === mainColName}
@@ -488,13 +491,31 @@
 	.form-grid {
 		display: flex;
 		flex-direction: column;
-		gap: 12px;
+		gap: 10px;
 		margin-bottom: 1.5rem;
 	}
 	.form-field {
 		display: flex;
 		flex-direction: column;
 		gap: 4px;
+	}
+	.form-field:not(.wide) {
+		flex-direction: row;
+		align-items: center;
+		gap: 10px;
+	}
+	.form-field:not(.wide) label {
+		flex: 0 0 200px;
+		margin: 0;
+	}
+	.form-field:not(.wide) label::after {
+		content: ':';
+	}
+	.form-field:not(.wide) :global(input),
+	.form-field:not(.wide) :global(textarea),
+	.form-field:not(.wide) :global(select) {
+		flex: 1;
+		min-width: 0;
 	}
 	.form-field :global(input),
 	.form-field :global(textarea),

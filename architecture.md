@@ -244,9 +244,10 @@ Runtime `ActionDef` uses function predicates: `show?: (status) => boolean`. DB s
 
 ### TabularSection
 
-- Editable inline grid: product (LookupInput), quantity, price, amount
-- `quantity * price` auto-compute, price auto-fill from LookupInput selection
-- **Hardcoded columns** — it does NOT render from `meta_columns`. New/renamed fields of a ТЧ table are ignored here (known limitation). Field order in a ТЧ is therefore not configurable via the Configurator.
+- Renders **dynamically from `meta_columns`**: headers are column titles, cells are the corresponding `fieldRegistry` FormField components (`bind:value={line.data[col.name]}`), so any field type works in a ТЧ (string, number, link, boolean, file, zip…). New lines are initialized with per-type defaults.
+- **Legacy auto-compute**: if a ТЧ has columns named `price`, `quantity` and `amount`, then `amount = price × quantity` is auto-recomputed on edit, the `amount` cell is read-only, and selecting a link value autofills `price` from the target record's `price` field.
+- ТЧ data is stored under the **column `name`s** (e.g. a document's ТЧ uses `product`, `quantity`, `price`, `amount` — so column names must match the data keys).
+- Field order in a ТЧ is not configurable via the Configurator (render follows `sort_order`).
 
 ### Toolbar
 

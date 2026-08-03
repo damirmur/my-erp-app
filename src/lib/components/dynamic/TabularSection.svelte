@@ -1,26 +1,45 @@
 <script lang="ts">
-	import LookupInput from '../ui/LookupInput.svelte';
 	import { db, type LocalLine, type LocalColumn } from '$lib/db/indexeddb';
+	import { fieldRegistry } from '$lib/fields';
+	import { defaultBirth } from '$lib/fields/birth';
+	import './erpTable.css';
 	let { lines = $bindable([]), onChange = null, readOnly = false, tableId = '' } = $props();
 	let selectedLineId = $state<string | null>(null);
-	let linkColumn = $state<LocalColumn | null>(null);
-	let relatedTableId = $derived(linkColumn?.related_table_id ?? tableId);
+	let columns = $state<LocalColumn[]>([]);
+
+	// Авторасчёт суммы (как в документах): если в ТЧ есть колонки price/quantity/amount
+	let hasAmountAuto = $derived(
+		columns.some((c) => c.name === 'price') &&
+			columns.some((c) => c.name === 'quantity') &&
+			columns.some((c) => c.name === 'amount')
+	);
 
 	$effect(() => {
 		if (!tableId) return;
 		db.meta_columns
 			.where('table_id')
 			.equals(tableId)
-			.toArray()
+			.sortBy('sort_order')
 			.then((cols) => {
-				linkColumn = cols.find((c) => c.type === 'link') ?? null;
+				columns = cols;
 			});
 	});
+
+	function defaultLineData(): Record<string, unknown> {
+		const data: Record<string, unknown> = {};
+		for (const col of columns) {
+			if (col.type === 'boolean') data[col.name] = false;
+			else if (col.type === 'birth') data[col.name] = defaultBirth();
+			else if (col.type === 'number') data[col.name] = 0;
+			else data[col.name] = '';
+		}
+		return data;
+	}
 
 	function addLine() {
 		lines.push({
 			id: crypto.randomUUID(),
-			data: { product: '', quantity: 1, price: 0, amount: 0 },
+			data: defaultLineData(),
 			sort_order: lines.length
 		});
 		if (onChange) onChange();
@@ -39,17 +58,26 @@
 		}
 	}
 
-	function calculateAmount(line: LocalLine) {
-		const qty = parseFloat(line.data.quantity) || 0;
-		const prc = parseFloat(line.data.price) || 0;
+	function recomputeAmount(line: LocalLine) {
+		const qty = parseFloat(line.data.quantity as any) || 0;
+		const prc = parseFloat(line.data.price as any) || 0;
 		line.data.amount = Number((qty * prc).toFixed(2));
-		if (onChange) onChange();
 	}
-	function handleProductSelect(line: LocalLine, productData: Record<string, any>) {
-		if (productData.price) {
-			line.data.price = parseFloat(productData.price) || 0;
+
+	function handleLinkSelect(line: LocalLine, data: Record<string, any>) {
+		if (columns.some((c) => c.name === 'price') && data?.price != null) {
+			line.data.price = parseFloat(data.price) || 0;
 		}
-		calculateAmount(line);
+		recomputeAmount(line);
+	}
+
+	function cellChange(col: LocalColumn, line: LocalLine, arg: any) {
+		if (col.type === 'link') {
+			handleLinkSelect(line, arg);
+		} else if (hasAmountAuto && (col.name === 'quantity' || col.name === 'price')) {
+			recomputeAmount(line);
+		}
+		if (onChange) onChange();
 	}
 </script>
 
@@ -65,19 +93,18 @@
 		</button>
 	</div>
 
-	<table class="section-table">
+	<table class="erp-table">
 		<thead>
 			<tr>
 				<th style="width: 40px;">№</th>
-				<th>Номенклатура / Описание</th>
-				<th style="width: 100px;">Кол-во</th>
-				<th style="width: 120px;">Цена</th>
-				<th style="width: 140px;">Сумма</th>
+				{#each columns as col}
+					<th>{col.title}</th>
+				{/each}
 			</tr>
 		</thead>
 		<tbody>
 			{#if lines.length === 0}
-				<tr><td colSpan="5" class="empty-text">Табличная часть пуста.</td></tr>
+				<tr><td colSpan={columns.length + 1} class="empty-text">Табличная часть пуста.</td></tr>
 			{:else}
 				{#each lines as line, index (line.id)}
 					<tr
@@ -88,40 +115,21 @@
 						}}
 					>
 						<td class="text-center">{index + 1}</td>
-						<td>
-							<LookupInput
-								bind:value={line.data.product}
-								targetTableId={relatedTableId}
-								disabled={readOnly}
-								onSelect={(productData) => handleProductSelect(line, productData)}
-							/>
-						</td>
-						<td>
-							<input
-								type="number"
-								bind:value={line.data.quantity}
-								oninput={() => calculateAmount(line)}
-								disabled={readOnly}
-								class="cell-input text-right"
-							/>
-						</td>
-						<td>
-							<input
-								type="number"
-								bind:value={line.data.price}
-								oninput={() => calculateAmount(line)}
-								disabled={readOnly}
-								class="cell-input text-right"
-							/>
-						</td>
-						<td>
-							<input
-								type="number"
-								value={line.data.amount}
-								readonly
-								class="cell-input text-right readonly"
-							/>
-						</td>
+						{#each columns as col}
+							<td>
+								{#if fieldRegistry[col.type]?.FormField}
+									{@const FC = fieldRegistry[col.type].FormField}
+									<FC
+										bind:value={line.data[col.name]}
+										disabled={readOnly || (hasAmountAuto && col.name === 'amount')}
+										onChange={(arg: any) => cellChange(col, line, arg)}
+										relatedTableId={col.related_table_id ?? ''}
+									/>
+								{:else}
+									{String(line.data[col.name] ?? '')}
+								{/if}
+							</td>
+						{/each}
 					</tr>
 				{/each}
 			{/if}
@@ -139,11 +147,39 @@
 	.tabular-row.selected {
 		background-color: #fef08a !important;
 	}
+	.tabular-actions {
+		display: flex;
+		gap: 6px;
+		margin-bottom: 8px;
+	}
+	.btn-add {
+		background: #ffffff;
+		border: 1px solid #cbd5e1;
+		border-radius: 4px;
+		padding: 5px 10px;
+		font-size: 0.8rem;
+		cursor: pointer;
+		color: #334155;
+	}
+	.btn-add:hover {
+		background: #f1f5f9;
+	}
+	.btn-add:disabled {
+		opacity: 0.5;
+		cursor: default;
+	}
 	.btn-remove {
-		margin-left: 4px;
 		color: #ef4444;
 	}
 	.btn-remove:disabled {
 		color: #cbd5e1;
+	}
+	.empty-text {
+		text-align: center;
+		color: #94a3b8;
+		padding: 1.5rem !important;
+	}
+	.text-center {
+		text-align: center;
 	}
 </style>

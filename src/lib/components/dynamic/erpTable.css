@@ -1,0 +1,33 @@
+.erp-table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 0.85rem;
+	text-align: left;
+}
+
+.erp-table th {
+	background-color: #f1f5f9;
+	color: #475569;
+	font-weight: 600;
+	border-right: 1px solid #cbd5e1;
+	border-bottom: 2px solid #cbd5e1;
+	padding: 6px 8px;
+	position: sticky;
+	top: 0;
+	user-select: none;
+}
+
+.erp-table td {
+	border-right: 1px solid #e2e8f0;
+	border-bottom: 1px solid #e2e8f0;
+	padding: 6px 8px;
+	color: #334155;
+	white-space: nowrap;
+}
+
+.erp-table input,
+.erp-table textarea,
+.erp-table select {
+	width: 100%;
+	box-sizing: border-box;
+}

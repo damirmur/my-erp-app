@@ -11,6 +11,7 @@
 	import { supabase } from '$lib/db/supabase';
 	import { liveQuery } from 'dexie';
 	import Toolbar from './Toolbar.svelte';
+	import './erpTable.css';
 
 	let { tableId, tabId = '' } = $props();
 
@@ -336,6 +337,11 @@
 		}
 	}
 
+	// Ячейка считается ссылкой, если значение начинается с http:// или https://
+	function isHttpUrl(value: unknown): value is string {
+		return typeof value === 'string' && /^https?:\/\//i.test(value.trim());
+	}
+
 	function toggleSelect(id: string) {
 		selectedIds = selectedIds.includes(id)
 			? selectedIds.filter((item) => item !== id)
@@ -500,7 +506,19 @@
 										}}
 										class:bold-text={record.is_folder}
 									>
-										{formatFieldValue(col.type, record.data[col.name])}
+										{#if isHttpUrl(record.data[col.name])}
+											<a
+												href={record.data[col.name]}
+												target="_blank"
+												rel="noopener noreferrer"
+												class="cell-link"
+												onclick={(e) => e.stopPropagation()}
+												title="Открыть ссылку"
+												>{formatFieldValue(col.type, record.data[col.name])}</a
+											>
+										{:else}
+											{formatFieldValue(col.type, record.data[col.name])}
+										{/if}
 									</td>
 								{/each}
 								<td class="td-actions">
@@ -638,23 +656,6 @@
 		flex: 1;
 		overflow: auto;
 	}
-	.erp-table {
-		width: 100%;
-		border-collapse: collapse;
-		font-size: 0.85rem;
-		text-align: left;
-	}
-	.erp-table th {
-		background-color: #f1f5f9;
-		color: #475569;
-		font-weight: 600;
-		border-right: 1px solid #cbd5e1;
-		border-bottom: 2px solid #cbd5e1;
-		padding: 6px 8px;
-		position: sticky;
-		top: 0;
-		user-select: none;
-	}
 	.sortable-th {
 		cursor: pointer;
 	}
@@ -679,13 +680,6 @@
 	.th-actions {
 		width: 64px;
 	}
-	.erp-table td {
-		border-right: 1px solid #e2e8f0;
-		border-bottom: 1px solid #e2e8f0;
-		padding: 6px 8px;
-		color: #334155;
-		white-space: nowrap;
-	}
 	.data-row {
 		cursor: pointer;
 		touch-action: manipulation;
@@ -706,6 +700,13 @@
 	.bold-text {
 		font-weight: 700;
 		color: #1e293b !important;
+	}
+	.cell-link {
+		color: #2563eb;
+		text-decoration: underline;
+	}
+	.cell-link:hover {
+		color: #1d4ed8;
 	}
 	.td-status-icon {
 		text-align: center;

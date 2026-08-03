@@ -1,0 +1,26 @@
+input,
+textarea,
+select {
+	border: 1px solid #cbd5e1;
+	border-radius: 4px;
+	padding: 5px 8px;
+	font-size: 0.85rem;
+	background: #ffffff;
+	color: #1e293b;
+	outline: none;
+	box-sizing: border-box;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+	border-color: #3b82f6;
+}
+
+input[type='checkbox'],
+input[type='radio'] {
+	width: auto;
+	padding: 0;
+	border: none;
+	background: none;
+}

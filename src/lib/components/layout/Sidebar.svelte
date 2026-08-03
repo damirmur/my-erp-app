@@ -60,6 +60,21 @@
 		return map;
 	});
 
+	// Таблица скрыта из основного режима, если в её config выставлен флаг hiddenInMain
+	function isVisibleInMain(table: LocalTable): boolean {
+		return table.config?.hiddenInMain !== true;
+	}
+
+	// Те же группы, но без скрытых таблиц (для основного режима)
+	let mainModeTablesByType = $derived.by(() => {
+		const map: Record<string, LocalTable[]> = {};
+		tables.forEach((table) => {
+			if (!isVisibleInMain(table)) return;
+			(map[table.type] ??= []).push(table);
+		});
+		return map;
+	});
+
 	// В режиме конструктора показываем все таблицы верхнего уровня (без табличных частей)
 	let constructorTables = $derived(
 		tables.filter((t) => !t.parent_table_id).sort((a, b) => a.title.localeCompare(b.title))
@@ -363,7 +378,7 @@
 				{/if}
 
 				{#each typeList as typeDef}
-					{#if typeDef.type !== 'tabular' && (workspace.mode === 'constructor' || (tablesByType[typeDef.type]?.length ?? 0) > 0)}
+					{#if typeDef.type !== 'tabular' && (workspace.mode === 'constructor' || (mainModeTablesByType[typeDef.type]?.length ?? 0) > 0)}
 						<div class="nav-group">
 							<div class="group-header-row">
 								<button class="group-header" onclick={() => toggleGroup(typeDef.type)}>
@@ -450,7 +465,7 @@
 											</li>
 										{/each}
 									{:else}
-										{#each tablesByType[typeDef.type] ?? [] as table}
+										{#each mainModeTablesByType[typeDef.type] ?? [] as table}
 											<li>
 												<button
 													onclick={() => workspace.openList(table.id, table.title)}

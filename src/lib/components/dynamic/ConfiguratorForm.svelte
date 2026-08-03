@@ -70,7 +70,15 @@
 		statusReadOnly: Record<string, boolean>;
 		periodic: boolean;
 		runCode: string;
-	}>({ features: {}, hiddenActions: [], statusReadOnly: {}, periodic: false, runCode: '' });
+		hiddenInMain: boolean;
+	}>({
+		features: {},
+		hiddenActions: [],
+		statusReadOnly: {},
+		periodic: false,
+		runCode: '',
+		hiddenInMain: false
+	});
 	let selectedTypeDef = $state<TableTypeModule | null>(null);
 
 	// Синоним таблицы (черновик)
@@ -130,7 +138,8 @@
 			hiddenActions: [...(effective.hiddenActions ?? [])],
 			statusReadOnly: { ...(effective.statusReadOnly ?? {}) },
 			periodic: effective.periodic ?? false,
-			runCode: selectedTableMeta.config?.runCode ?? ''
+			runCode: selectedTableMeta.config?.runCode ?? '',
+			hiddenInMain: selectedTableMeta.config?.hiddenInMain ?? false
 		};
 
 		const cols = await db.meta_columns
@@ -352,6 +361,8 @@
 					subId = await metadata.createNewTable(sub.title, 'tabular', sub.name, selectedTableId);
 				}
 				if (subId) {
+					// Нормализуем порядок реквизитов ТЧ (устраняем дубли sort_order)
+					sub.columns.filter((c) => !c.deleted).forEach((c, i) => (c.sort_order = (i + 1) * 10));
 					for (const col of sub.columns) {
 						if (col.deleted) {
 							if (col.dbId) await metadata.deleteColumnQuiet(col.dbId);
@@ -459,7 +470,7 @@
 			<div class="editor-workspace">
 				<!-- 1. Реквизиты Шапки -->
 				<h4>1. Реквизиты Шапки:</h4>
-				<table class="config-table" border="1">
+				<table class="config-table">
 					<thead>
 						<tr
 							><th style="width:80px;">Порядок</th><th>Имя</th><th>Заголовок</th><th
@@ -553,6 +564,17 @@
 							{/each}
 						</div>
 
+						<div class="cfg-status-readonly">
+							<label class="cfg-check">
+								<input
+									type="checkbox"
+									bind:checked={editConfig.hiddenInMain}
+									onchange={markDirty}
+								/>
+								🙈 Скрыть из основного режима (не показывать в боковой панели)
+							</label>
+						</div>
+
 						{#if selectedTypeDef.statuses.length > 1}
 							<div class="cfg-status-readonly">
 								<span class="cfg-label">Статусы «только чтение»:</span>
@@ -629,17 +651,32 @@
 								>
 							</div>
 
-							<table class="config-table" border="1">
+							<table class="config-table">
 								<thead>
 									<tr
-										><th>Имя</th><th>Заголовок</th><th>Тип реквизита</th><th style="width:80px;"
-											>Действия</th
-										></tr
+										><th style="width:80px;">Порядок</th><th>Имя</th><th>Заголовок</th><th
+											>Тип реквизита</th
+										><th style="width:80px;">Действия</th></tr
 									>
 								</thead>
 								<tbody>
-									{#each sub.columns.filter((c) => !c.deleted) as col}
+									{#each sub.columns.filter((c) => !c.deleted) as col, i (col.key)}
 										<tr class:editing-row={editingColKey === col.key}>
+											<td class="text-center">
+												<button
+													onclick={() => handleMoveColumn(sub.key, col, -1)}
+													class="btn-icon-edit"
+													title="Переместить выше"
+													disabled={i === 0}>▲</button
+												>
+												<button
+													onclick={() => handleMoveColumn(sub.key, col, 1)}
+													class="btn-icon-edit"
+													title="Переместить ниже"
+													disabled={i === sub.columns.filter((c) => !c.deleted).length - 1}
+													>▼</button
+												>
+											</td>
 											<td>{col.name}</td>
 											<td>{col.title}</td>
 											<td>{fieldTypeLabel(col.type)}</td>

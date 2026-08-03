@@ -8,6 +8,7 @@ export interface TableConfig {
 	statusReadOnly?: Record<string, boolean>;
 	periodic?: boolean; // для типа constant: периодическое значение
 	runCode?: string; // JS-код действия «▶️ Выполнить» (выполняется в браузере)
+	hiddenInMain?: boolean; // скрыть таблицу из основного режима
 }
 
 export interface LocalTable {

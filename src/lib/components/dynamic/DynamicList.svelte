@@ -13,10 +13,13 @@
 
 	let { tableId, tabId = '' } = $props();
 
+	const isCoarse = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
+
 	let tableMeta = $state<LocalTable | null>(null);
 	let columns = $state<LocalColumn[]>([]);
 	let records = $state<LocalRecord[]>([]);
 	let selectedIds = $state<string[]>([]);
+	let openMenuId = $state<string | null>(null);
 	let loading = $state(false);
 
 	let currentFolderId = $state<string | null>(null);
@@ -344,6 +347,55 @@
 				? []
 				: filteredAndSortedRecords.map((r) => r.id);
 	}
+
+	function openRecord(record: LocalRecord) {
+		if (record.is_folder && isHierarchical) {
+			currentFolderId = record.id;
+			selectedIds = [];
+		} else {
+			workspace.openForm(
+				tableId,
+				record.id,
+				tableMeta?.title ?? '',
+				record.data.number || record.data.name
+			);
+		}
+	}
+
+	async function postRecord(id: string) {
+		await db.data_records.update(id, { status: 'posted', is_dirty: 1 });
+		selectedIds = selectedIds.filter((i) => i !== id);
+	}
+
+	async function markForDeletion(id: string) {
+		await db.data_records.update(id, { status: 'marked_for_deletion', is_dirty: 1 });
+		selectedIds = selectedIds.filter((i) => i !== id);
+	}
+
+	async function restoreRecord(id: string) {
+		await db.data_records.update(id, { status: 'draft', is_dirty: 1 });
+		selectedIds = selectedIds.filter((i) => i !== id);
+	}
+
+	async function deleteRecord(id: string) {
+		if (!confirm('Безвозвратно удалить запись?')) return;
+		try {
+			await physicalDeleteRecords([id]);
+		} catch (e: any) {
+			alert(`Ошибка удаления: ${e?.message ?? e}`);
+			return;
+		}
+		workspace.closeTabForce(`form_${tableId}_${id}`);
+		selectedIds = selectedIds.filter((i) => i !== id);
+	}
+
+	// Закрытие меню ⋮ при клике в любом месте вне кнопок меню.
+	$effect(() => {
+		if (!openMenuId) return;
+		const close = () => (openMenuId = null);
+		document.addEventListener('click', close);
+		return () => document.removeEventListener('click', close);
+	});
 </script>
 
 <div class="list-container">
@@ -395,12 +447,13 @@
 								</div>
 							</th>
 						{/each}
+						<th class="th-actions" title="Действия"></th>
 					</tr>
 				</thead>
 				<tbody>
 					{#if filteredAndSortedRecords.length === 0}
 						<tr
-							><td colSpan={columns.length + 2} class="empty-row">В этой папке нет элементов.</td
+							><td colSpan={columns.length + 3} class="empty-row">В этой папке нет элементов.</td
 							></tr
 						>
 					{:else}
@@ -410,19 +463,8 @@
 								class:selected={selectedIds.includes(record.id)}
 								class:deleted={record.status === 'marked_for_deletion'}
 								class:folder-row={record.is_folder}
-								ondblclick={() => {
-									if (record.is_folder && isHierarchical) {
-										currentFolderId = record.id;
-										selectedIds = [];
-									} else {
-										workspace.openForm(
-											tableId,
-											record.id,
-											tableMeta?.title ?? '',
-											record.data.number || record.data.name
-										);
-									}
-								}}
+								onclick={() => isCoarse && openRecord(record)}
+								ondblclick={() => !isCoarse && openRecord(record)}
 							>
 								<td style="text-align:center;" onclick={(e) => e.stopPropagation()}>
 									<input
@@ -431,17 +473,114 @@
 										onchange={() => toggleSelect(record.id)}
 									/>
 								</td>
-								<td class="td-status-icon" onclick={() => toggleSelect(record.id)}>
+								<td
+									class="td-status-icon"
+									onclick={() => {
+										if (!isCoarse) toggleSelect(record.id);
+									}}
+								>
 									{#if record.is_folder}📁
 									{:else if record.status === 'posted'}🟢
 									{:else if record.status === 'marked_for_deletion'}❌
 									{:else}⚪{/if}
 								</td>
 								{#each columns as col}
-									<td onclick={() => toggleSelect(record.id)} class:bold-text={record.is_folder}>
+									<td
+										onclick={() => {
+											if (!isCoarse) toggleSelect(record.id);
+										}}
+										class:bold-text={record.is_folder}
+									>
 										{formatFieldValue(col.type, record.data[col.name])}
 									</td>
 								{/each}
+								<td class="td-actions">
+									<button
+										type="button"
+										class="row-action-btn"
+										title="Открыть"
+										onclick={(e) => {
+											e.stopPropagation();
+											openRecord(record);
+										}}>👁</button
+									>
+									<div class="row-menu-wrap">
+										<button
+											type="button"
+											class="row-action-btn"
+											title="Действия"
+											onclick={(e) => {
+												e.stopPropagation();
+												openMenuId = openMenuId === record.id ? null : record.id;
+											}}>⋮</button
+										>
+										{#if openMenuId === record.id}
+											<div class="row-menu">
+												<button
+													type="button"
+													class="row-menu-item"
+													onclick={(e) => {
+														e.stopPropagation();
+														openMenuId = null;
+														openRecord(record);
+													}}
+												>
+													Открыть
+												</button>
+												{#if !record.is_folder && tableTypeDef.statuses.some((s) => s.role === 'posted') && record.status !== 'posted'}
+													<button
+														type="button"
+														class="row-menu-item"
+														onclick={(e) => {
+															e.stopPropagation();
+															openMenuId = null;
+															postRecord(record.id);
+														}}
+													>
+														🟢 Провести
+													</button>
+												{/if}
+												{#if !record.is_folder && tableTypeDef.statuses.some((s) => s.role === 'deleted') && record.status !== 'marked_for_deletion'}
+													<button
+														type="button"
+														class="row-menu-item"
+														onclick={(e) => {
+															e.stopPropagation();
+															openMenuId = null;
+															markForDeletion(record.id);
+														}}
+													>
+														🗑 Пометить на удаление
+													</button>
+												{/if}
+												{#if !record.is_folder && record.status === 'marked_for_deletion'}
+													<button
+														type="button"
+														class="row-menu-item"
+														onclick={(e) => {
+															e.stopPropagation();
+															openMenuId = null;
+															restoreRecord(record.id);
+														}}
+													>
+														↩️ Восстановить
+													</button>
+													<button
+														type="button"
+														class="row-menu-item danger"
+														onclick={(e) => {
+															e.stopPropagation();
+															openMenuId = null;
+															deleteRecord(record.id);
+														}}
+													>
+														❌ Удалить безвозвратно
+													</button>
+												{/if}
+											</div>
+										{/if}
+									</div>
+								</td>
 							</tr>
 						{/each}
 					{/if}
@@ -528,6 +667,9 @@
 		width: 60px;
 		text-align: center;
 	}
+	.th-actions {
+		width: 64px;
+	}
 	.erp-table td {
 		border-right: 1px solid #e2e8f0;
 		border-bottom: 1px solid #e2e8f0;
@@ -537,6 +679,7 @@
 	}
 	.data-row {
 		cursor: pointer;
+		touch-action: manipulation;
 	}
 	.data-row:hover {
 		background-color: #f8fafc;
@@ -558,6 +701,55 @@
 	.td-status-icon {
 		text-align: center;
 		font-size: 0.75rem;
+	}
+	.td-actions {
+		text-align: center;
+		white-space: nowrap;
+	}
+	.row-action-btn {
+		background: none;
+		border: none;
+		cursor: pointer;
+		font-size: 0.9rem;
+		padding: 2px 6px;
+		border-radius: 4px;
+		line-height: 1;
+	}
+	.row-action-btn:hover {
+		background: #e2e8f0;
+	}
+	.row-menu-wrap {
+		position: relative;
+		display: inline-block;
+	}
+	.row-menu {
+		position: absolute;
+		right: 0;
+		top: 100%;
+		z-index: 50;
+		background: #ffffff;
+		border: 1px solid #cbd5e1;
+		border-radius: 6px;
+		box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+		min-width: 190px;
+		text-align: left;
+	}
+	.row-menu-item {
+		display: block;
+		width: 100%;
+		background: none;
+		border: none;
+		padding: 8px 12px;
+		font-size: 0.85rem;
+		text-align: left;
+		cursor: pointer;
+		color: #334155;
+	}
+	.row-menu-item:hover {
+		background: #f1f5f9;
+	}
+	.row-menu-item.danger {
+		color: #dc2626;
 	}
 	.empty-row {
 		text-align: center;

@@ -27,6 +27,7 @@ export interface LocalColumn {
 	title: string;
 	type:
 		| 'string'
+		| 'textarea'
 		| 'number'
 		| 'boolean'
 		| 'date'

@@ -23,17 +23,38 @@ export async function runActionCode(code: string, ctx: RunActionContext): Promis
 	return await fn(...values);
 }
 
+// Глубокая копия без Svelte-прокси и ссылок на реактивные объекты:
+// IndexedDB не может структурировано клонировать $state-прокси (DataCloneError).
+function toPlain(value: unknown): any {
+	if (Array.isArray(value)) return value.map(toPlain);
+	if (value instanceof Date) return new Date(value.getTime());
+	if (value && typeof value === 'object') {
+		const out: Record<string, any> = {};
+		for (const key of Object.keys(value as Record<string, any>)) {
+			out[key] = toPlain((value as Record<string, any>)[key]);
+		}
+		return out;
+	}
+	return value;
+}
+
 // Сохранение изменённой кодом записи: локально (is_dirty=1) + строки ТЧ.
 // Серверная синхронизация произойдёт в ближайшем цикле sync.
 export async function saveRecordWithLines(record: LocalRecord, lines?: LocalLine[]): Promise<void> {
 	await db.transaction('rw', [db.data_records, db.data_lines], async () => {
 		await db.data_records.put({
 			...record,
+			data: toPlain(record.data),
 			is_dirty: 1,
 			updated_at: new Date().toISOString()
 		});
 		if (lines) {
-			await db.data_lines.bulkPut(lines.map((l) => ({ ...l })));
+			await db.data_lines.bulkPut(
+				lines.map((l) => ({
+					...l,
+					data: toPlain(l.data)
+				}))
+			);
 		}
 	});
 }

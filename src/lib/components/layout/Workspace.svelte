@@ -1,8 +1,22 @@
 <script lang="ts">
 	import { workspace } from '$lib/state/workspace.svelte';
+	import { syncService } from '$lib/services/sync';
 	import DynamicList from '../dynamic/DynamicList.svelte';
 	import DynamicForm from '../dynamic/DynamicForm.svelte';
 	import ConfiguratorForm from '../dynamic/ConfiguratorForm.svelte';
+
+	let syncing = $state(false);
+	let lastSyncLabel = $state<string | null>(null);
+
+	async function handleSync() {
+		if (syncing) return;
+		syncing = true;
+		await syncService.runFullSync();
+		syncing = false;
+		lastSyncLabel = navigator.onLine
+			? `Обновлено ${new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}`
+			: 'Нет соединения';
+	}
 </script>
 
 <main class="workspace">
@@ -15,6 +29,19 @@
 		>
 			{workspace.sidebarCollapsed ? '▶' : '◀'}
 		</button>
+
+		<button
+			onclick={handleSync}
+			class="sync-btn"
+			class:syncing
+			disabled={syncing}
+			title={lastSyncLabel ?? 'Синхронизировать с сервером'}
+		>
+			{syncing ? '⏳' : '🔄'}
+		</button>
+		{#if lastSyncLabel}
+			<span class="sync-label" class:offline={!navigator.onLine}>{lastSyncLabel}</span>
+		{/if}
 
 		{#if workspace.tabs.length === 0}
 			<div class="tabs-empty-text">Нет открытых окон. Выберите раздел слева.</div>
@@ -103,6 +130,37 @@
 	.sidebar-toggle-btn:hover {
 		background-color: #e2e8f0;
 		color: #1f2937;
+	}
+	.sync-btn {
+		background: none;
+		border: 1px solid #cbd5e1;
+		border-radius: 0.25rem;
+		color: #475569;
+		font-size: 0.8rem;
+		width: 28px;
+		height: 28px;
+		cursor: pointer;
+		flex-shrink: 0;
+		transition:
+			background-color 0.2s,
+			color 0.2s;
+	}
+	.sync-btn:hover:not(:disabled) {
+		background-color: #e2e8f0;
+		color: #1f2937;
+	}
+	.sync-btn:disabled {
+		cursor: default;
+		opacity: 0.6;
+	}
+	.sync-label {
+		font-size: 0.75rem;
+		color: #64748b;
+		white-space: nowrap;
+		flex-shrink: 0;
+	}
+	.sync-label.offline {
+		color: #dc2626;
 	}
 	.tabs-empty-text {
 		font-size: 0.85rem;

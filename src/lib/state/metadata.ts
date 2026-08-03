@@ -127,11 +127,15 @@ class MetadataManager {
 			related_table_id?: string | null;
 		}
 	) {
+		let result;
 		if (colId === 'new') {
-			await supabase.from('meta_columns').insert([{ table_id: tableId, ...columnData }]);
+			result = await supabase
+				.from('meta_columns')
+				.insert([{ table_id: tableId, ...columnData }]);
 		} else {
-			await supabase.from('meta_columns').update(columnData).eq('id', colId);
+			result = await supabase.from('meta_columns').update(columnData).eq('id', colId);
 		}
+		if (result.error) alert(`Ошибка сохранения реквизита: ${result.error.message}`);
 	}
 
 	async updateTableConfig(tableId: string, config: Record<string, any>): Promise<string | null> {

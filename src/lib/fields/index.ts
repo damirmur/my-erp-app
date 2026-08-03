@@ -1,5 +1,6 @@
 import type { FieldTypeModule } from './field';
 import stringField from './string';
+import textareaField from './textarea';
 import numberField from './number';
 import booleanField from './boolean';
 import dateField from './date';
@@ -12,6 +13,7 @@ export type { FieldTypeModule } from './field';
 
 export const fieldRegistry: Record<string, FieldTypeModule> = {
 	string: stringField,
+	textarea: textareaField,
 	number: numberField,
 	boolean: booleanField,
 	date: dateField,
@@ -44,5 +46,6 @@ export function formatFieldValue(type: string, raw: any): string {
 		return parts.join(' · ');
 	}
 	if (typeof raw === 'object') return JSON.stringify(raw);
+	if (type === 'textarea') return String(raw).replace(/\s+/g, ' ').trim();
 	return String(raw);
 }

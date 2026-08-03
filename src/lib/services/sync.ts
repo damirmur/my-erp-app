@@ -61,19 +61,32 @@ export const syncService = {
 			if (rError) throw rError;
 
 			if (serverRecords && serverRecords.length > 0) {
-				const recordIds = serverRecords.map((r) => r.id);
+				// Локально изменённые, но ещё не отправленные на сервер записи не затираем:
+				// их отправит pushLocalChanges, а серверная копия может быть устаревшей.
+				const dirtyIds = new Set(
+					(await db.data_records.where('is_dirty').equals(1).toArray()).map((r) => r.id)
+				);
+				const freshRecords = serverRecords.filter((r) => !dirtyIds.has(r.id));
 
-				// Скачиваем табличные части для этих записей
+				if (freshRecords.length === 0) return;
+
+				// Скачиваем табличные части только для действительно новых записей
 				const { data: serverLines, error: lError } = await supabase
 					.from('data_lines')
 					.select('*')
-					.in('record_id', recordIds);
+					.in(
+						'record_id',
+						freshRecords.map((r) => r.id)
+					);
 
 				if (lError) throw lError;
 
+				const freshRecordIds = new Set(freshRecords.map((r) => r.id));
+				const freshLines = (serverLines ?? []).filter((l) => freshRecordIds.has(l.record_id));
+
 				// Записываем в IndexedDB
 				await db.transaction('rw', [db.data_records, db.data_lines], async () => {
-					for (const record of serverRecords) {
+					for (const record of freshRecords) {
 						await db.data_records.put({
 							id: record.id,
 							table_id: record.table_id,
@@ -86,19 +99,17 @@ export const syncService = {
 						});
 					}
 
-					if (serverLines) {
-						for (const line of serverLines) {
-							await db.data_lines.put({
-								id: line.id,
-								record_id: line.record_id,
-								table_id: line.table_id,
-								data: line.data,
-								sort_order: line.sort_order
-							});
-						}
+					for (const line of freshLines) {
+						await db.data_lines.put({
+							id: line.id,
+							record_id: line.record_id,
+							table_id: line.table_id,
+							data: line.data,
+							sort_order: line.sort_order
+						});
 					}
 				});
-				console.log(` Синхронизировано ${serverRecords.length} записей с сервера.`);
+				console.log(` Синхронизировано ${freshRecords.length} записей с сервера.`);
 			}
 		} catch (err) {
 			console.error('Ошибка при скачивании изменений:', err);
@@ -131,6 +142,24 @@ export const syncService = {
 					});
 
 					if (rError) throw rError;
+
+					// Страховка: если в БД нет уникального ограничения на id, upsert вставляет
+					// дубликат при каждой отправке. Проверяем и оставляем самую свежую строку.
+					const { data: dupCheck, error: dupErr } = await supabase
+						.from('data_records')
+						.select('id, updated_at')
+						.eq('id', localRecord.id);
+					if (!dupErr && dupCheck && dupCheck.length > 1) {
+						console.warn(
+							`Запись ${localRecord.id}: найдено ${dupCheck.length} строк на сервере. Удаляю дубликаты.`
+						);
+						const newest = [...dupCheck].sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1))[0];
+						await supabase
+							.from('data_records')
+							.delete()
+							.eq('id', localRecord.id)
+							.neq('updated_at', newest.updated_at);
+					}
 
 					// 2. Синхронизируем табличную часть.
 					// Чтобы не усложнять, сначала удалим старые строки этой ТЧ на сервере и запишем новые
@@ -178,15 +207,28 @@ export const syncService = {
 
 	// Глобальный запуск полной синхронизации (например, по таймеру или кнопке)
 	async runFullSync() {
+		if (running) {
+			console.log('Синхронизация уже выполняется, пропускаем запуск.');
+			return;
+		}
+
 		if (!navigator.onLine) {
 			console.log('Офлайн режим. Синхронизация отложена.');
 			return;
 		}
 
+		running = true;
 		console.log('Запуск процесса синхронизации...');
-		await this.pullMetadata(); // Сначала конфигурация
-		await this.pushLocalChanges(); // Затем отдаем свои изменения
-		await this.pullDataChanges(); // В конце забираем чужие изменения
-		console.log('Синхронизация завершена.');
+		try {
+			await this.pullMetadata(); // Сначала конфигурация
+			await this.pushLocalChanges(); // Затем отдаем свои изменения
+			await this.pullDataChanges(); // В конце забираем чужие изменения
+			console.log('Синхронизация завершена.');
+		} finally {
+			running = false;
+		}
 	}
 };
+
+// Флаг выполнения синхронизации (защита от одновременного запуска по таймеру и вручную)
+let running = false;

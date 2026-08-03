@@ -200,10 +200,9 @@
 
 		backupActiveLines();
 
-		const cleanData: Record<string, any> = {};
-		for (const key of Object.keys(recordData)) {
-			cleanData[key] = recordData[key];
-		}
+		// $state.snapshot снимает глубоко-реактивные Svelte-прокси, которые
+		// IndexedDB не может клонировать (DataCloneError при put).
+		const cleanData = $state.snapshot(recordData);
 
 		const cleanLines: Array<{
 			subTableId: string;
@@ -214,37 +213,42 @@
 				subTableId,
 				lines: lines.map((line) => ({
 					id: line.id,
-					data: Object.fromEntries(Object.entries(line.data)),
+					data: $state.snapshot(line.data),
 					sort_order: line.sort_order || 0
 				}))
 			});
 		}
 
-		await db.transaction('rw', [db.data_records, db.data_lines], async () => {
-			await db.data_records.put({
-				id: recordId,
-				table_id: tableId,
-				status: targetStatus as any,
-				is_folder: false,
-				parent_id: null,
-				data: { ...cleanData, total_amount: totalAmount },
-				is_dirty: 1,
-				updated_at: new Date().toISOString()
-			});
+		try {
+			await db.transaction('rw', [db.data_records, db.data_lines], async () => {
+				await db.data_records.put({
+					id: recordId,
+					table_id: tableId,
+					status: targetStatus as any,
+					is_folder: false,
+					parent_id: null,
+					data: { ...cleanData, total_amount: totalAmount },
+					is_dirty: 1,
+					updated_at: new Date().toISOString()
+				});
 
-			await db.data_lines.where('record_id').equals(recordId).delete();
-			for (const { subTableId, lines } of cleanLines) {
-				for (const line of lines) {
-					await db.data_lines.put({
-						id: line.id,
-						record_id: recordId,
-						table_id: subTableId,
-						data: line.data,
-						sort_order: line.sort_order
-					});
+				await db.data_lines.where('record_id').equals(recordId).delete();
+				for (const { subTableId, lines } of cleanLines) {
+					for (const line of lines) {
+						await db.data_lines.put({
+							id: line.id,
+							record_id: recordId,
+							table_id: subTableId,
+							data: line.data,
+							sort_order: line.sort_order
+						});
+					}
 				}
-			}
-		});
+			});
+		} catch (e: any) {
+			alert(`Ошибка сохранения: ${e?.message ?? e}`);
+			return;
+		}
 
 		workspace.setDirty(tabId, false);
 		workspace.updateTabTitle(
@@ -336,10 +340,7 @@
 		const newRecordId = crypto.randomUUID();
 		backupActiveLines();
 
-		const cleanData: Record<string, any> = {};
-		for (const key of Object.keys(recordData)) {
-			cleanData[key] = recordData[key];
-		}
+		const cleanData = $state.snapshot(recordData);
 		const cleanLines: Array<{
 			subTableId: string;
 			lines: Array<{ id: string; data: Record<string, any>; sort_order: number }>;
@@ -349,7 +350,7 @@
 				subTableId,
 				lines: lines.map((line) => ({
 					id: line.id,
-					data: Object.fromEntries(Object.entries(line.data)),
+					data: $state.snapshot(line.data),
 					sort_order: line.sort_order || 0
 				}))
 			});

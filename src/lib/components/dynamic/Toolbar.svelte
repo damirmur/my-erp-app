@@ -1,12 +1,21 @@
 <script lang="ts">
-	import { db, type LocalTable } from '$lib/db/indexeddb';
+	import { db, type LocalColumn, type LocalTable } from '$lib/db/indexeddb';
 	import { getTableType, getActions, getStatusDef } from '$lib/table-types';
 
-	let { mode = 'list', status = 'draft', tableId = '', onAction = null } = $props();
+	let {
+		mode = 'list',
+		status = 'draft',
+		tableId = '',
+		onAction = null,
+		columns = [] as LocalColumn[],
+		onToggleColumn = null
+	} = $props();
 
 	let tableMeta = $state<LocalTable | null>(null);
 	let printForms = $state<{ id: string; name: string; is_default: boolean }[]>([]);
 	let showPrintMenu = $state(false);
+	let showMoreMenu = $state(false);
+	let showColumnsMenu = $state(false);
 	let hasPrintForms = $derived(printForms.length > 0);
 
 	$effect(() => {
@@ -27,6 +36,20 @@
 	let actions = $derived(getActions(tableTypeName, mode, tableConfig));
 
 	let currentStatusDef = $derived(getStatusDef(tableTypeName, status));
+
+	// Закрытие выпадающих меню при клике вне кнопок меню
+	// (клики внутри .toolbar-menu-wrap не закрывают меню — чтобы можно было
+	// переключать несколько чекбоксов видимости подряд)
+	$effect(() => {
+		if (!showMoreMenu && !showColumnsMenu) return;
+		const close = (e: MouseEvent) => {
+			if ((e.target as Element).closest?.('.toolbar-menu-wrap')) return;
+			showMoreMenu = false;
+			showColumnsMenu = false;
+		};
+		document.addEventListener('click', close);
+		return () => document.removeEventListener('click', close);
+	});
 </script>
 
 {#if tableMeta}
@@ -79,6 +102,73 @@
 					</button>
 				{/if}
 			{/each}
+			{#if mode === 'list'}
+				<div class="toolbar-menu-wrap">
+					<button
+						class="btn btn-icon-only"
+						title="Все действия"
+						onclick={(e) => {
+							e.stopPropagation();
+							showMoreMenu = !showMoreMenu;
+							showColumnsMenu = false;
+						}}
+					>
+						⋮
+					</button>
+					{#if showMoreMenu}
+						<div class="toolbar-menu">
+							{#each actions as act}
+								{#if !act.show || act.show(status)}
+									<button
+										type="button"
+										class="toolbar-menu-item"
+										class:disabled={act.disabled?.(status) ?? false}
+										onclick={() => {
+											showMoreMenu = false;
+											onAction?.(act.id);
+										}}
+									>
+										{act.icon}
+										{act.label}
+									</button>
+								{/if}
+							{/each}
+						</div>
+					{/if}
+				</div>
+				{#if columns.length > 0}
+					<div class="toolbar-menu-wrap">
+						<button
+							class="btn btn-icon-only"
+							title="Настройка колонок списка"
+							onclick={(e) => {
+								e.stopPropagation();
+								showColumnsMenu = !showColumnsMenu;
+								showMoreMenu = false;
+							}}
+						>
+							⚙️
+						</button>
+						{#if showColumnsMenu}
+							<div class="toolbar-menu toolbar-menu-columns">
+								{#each columns as col}
+									<label class="toolbar-menu-check">
+										<input
+											type="checkbox"
+											checked={col.is_visible !== false}
+											onchange={(e) => {
+												const checked = (e.target as HTMLInputElement).checked;
+												onToggleColumn?.(col.id, checked);
+											}}
+										/>
+										{col.title}
+									</label>
+								{/each}
+							</div>
+						{/if}
+					</div>
+				{/if}
+			{/if}
 		</div>
 		<div class="toolbar-status" hidden={mode !== 'form'}>
 			<span class="badge {currentStatusDef?.badgeClass ?? 'status-draft'}">
@@ -207,6 +297,65 @@
 	}
 	.print-menu-item:hover {
 		background-color: #f1f5f9;
+	}
+
+	.toolbar-menu-wrap {
+		position: relative;
+		display: inline-block;
+	}
+	.btn-icon-only {
+		padding: 4px 10px;
+	}
+	.toolbar-menu {
+		position: absolute;
+		top: 100%;
+		right: 0;
+		background: #fff;
+		border: 1px solid #cbd5e1;
+		box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+		border-radius: 6px;
+		z-index: 50;
+		min-width: 190px;
+		margin-top: 4px;
+		max-height: 300px;
+		overflow-y: auto;
+	}
+	.toolbar-menu-columns {
+		min-width: 200px;
+	}
+	.toolbar-menu-item {
+		width: 100%;
+		text-align: left;
+		background: none;
+		border: none;
+		padding: 8px 12px;
+		font-size: 0.85rem;
+		cursor: pointer;
+		color: #334155;
+	}
+	.toolbar-menu-item:hover {
+		background-color: #f1f5f9;
+	}
+	.toolbar-menu-item.disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+	.toolbar-menu-check {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		padding: 6px 12px;
+		font-size: 0.85rem;
+		cursor: pointer;
+		color: #334155;
+		white-space: nowrap;
+	}
+	.toolbar-menu-check:hover {
+		background-color: #f1f5f9;
+	}
+	.toolbar-menu-check input {
+		width: auto;
+		margin: 0;
 	}
 
 	.badge {

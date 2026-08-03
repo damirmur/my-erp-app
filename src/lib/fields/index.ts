@@ -8,6 +8,8 @@ import datetimeField from './datetime';
 import birthField from './birth';
 import linkField from './link';
 import jsonbField from './jsonb';
+import fileField from './file';
+import zipField from './zip';
 
 export type { FieldTypeModule } from './field';
 
@@ -20,7 +22,9 @@ export const fieldRegistry: Record<string, FieldTypeModule> = {
 	datetime: datetimeField,
 	birth: birthField,
 	link: linkField,
-	jsonb: jsonbField
+	jsonb: jsonbField,
+	file: fileField,
+	zip: zipField
 };
 
 export const fieldTypeList: FieldTypeModule[] = Object.values(fieldRegistry);
@@ -32,6 +36,14 @@ export function fieldTypeLabel(type: string): string {
 // Форматирование значения ячейки списка по типу поля
 export function formatFieldValue(type: string, raw: any): string {
 	if (raw == null || raw === '') return '';
+	if (type === 'file' && typeof raw === 'object') {
+		return raw.name ? `📄 ${raw.name}` : '';
+	}
+	if (type === 'zip' && typeof raw === 'object') {
+		const count = Array.isArray(raw.files) ? raw.files.length : 0;
+		const name = raw.name ? ` ${raw.name}` : '';
+		return `🗜${name} (${count} файл.)`;
+	}
 	if (type === 'datetime') {
 		const d = new Date(raw);
 		if (isNaN(d.getTime())) return String(raw);

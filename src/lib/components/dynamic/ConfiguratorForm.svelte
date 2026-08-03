@@ -28,6 +28,7 @@
 		type: string;
 		sort_order: number;
 		related_table_id: string | null;
+		is_visible: boolean;
 	}
 
 	interface SubTableDraft {
@@ -81,6 +82,8 @@
 
 	// Видимые ТЧ (без помеченных на удаление)
 	let visibleSubTables = $derived(subTablesDraft.filter((s) => !s.deleted));
+	// Видимые реквизиты шапки (без помеченных на удаление)
+	let visibleHeaderColumns = $derived(headerColumns.filter((c) => !c.deleted));
 
 	function markDirty() {
 		workspace.setDirty(tabId, true);
@@ -93,6 +96,7 @@
 		type: string;
 		sort_order: number;
 		related_table_id?: string | null;
+		is_visible?: boolean;
 	}): ColumnDraft {
 		return {
 			key: crypto.randomUUID(),
@@ -103,7 +107,8 @@
 			title: col.title,
 			type: col.type,
 			sort_order: col.sort_order ?? 10,
-			related_table_id: col.related_table_id ?? null
+			related_table_id: col.related_table_id ?? null,
+			is_visible: col.is_visible !== false
 		};
 	}
 
@@ -235,7 +240,8 @@
 				title: newColTitle,
 				type: newColType,
 				sort_order: 10,
-				related_table_id: newColRelatedTableId || null
+				related_table_id: newColRelatedTableId || null,
+				is_visible: false // По умолчанию новый реквизит скрыт в списке (виден только в форме)
 			});
 		}
 		handleCancelEdit();
@@ -247,6 +253,23 @@
 			return;
 		col.deleted = true;
 		if (editingColKey === col.key) handleCancelEdit();
+		markDirty();
+	}
+
+	// Изменение порядка реквизита: переставляем элемент в массиве (рендер идёт по порядку массива,
+	// а sort_order нормализуется при сохранении)
+	function handleMoveColumn(key: string, col: ColumnDraft, delta: -1 | 1) {
+		const list = getColumnList(key);
+		const visible = list.filter((c) => !c.deleted);
+		const index = visible.findIndex((c) => c.key === col.key);
+		const target = index + delta;
+		if (index === -1 || target < 0 || target >= visible.length) return;
+		const a = visible[index];
+		const b = visible[target];
+		const ai = list.indexOf(a);
+		const bi = list.indexOf(b);
+		list[ai] = b;
+		list[bi] = a;
 		markDirty();
 	}
 
@@ -287,6 +310,8 @@
 			await metadata.updateTableConfig(selectedTableId, editConfig);
 
 			// Реквизиты шапки
+			// Нормализуем порядок: устраняем дубли sort_order (новые реквизиты получают 10)
+			headerColumns.filter((c) => !c.deleted).forEach((c, i) => (c.sort_order = (i + 1) * 10));
 			for (const col of headerColumns) {
 				if (col.deleted) {
 					if (col.dbId) await metadata.deleteColumnQuiet(col.dbId);
@@ -298,7 +323,8 @@
 						title: col.title,
 						type: col.type,
 						sort_order: col.sort_order,
-						related_table_id: col.related_table_id
+						related_table_id: col.related_table_id,
+						is_visible: col.is_visible
 					});
 				} else {
 					await metadata.saveOrUpdateColumn(selectedTableId, 'new', {
@@ -306,7 +332,8 @@
 						title: col.title,
 						type: col.type,
 						sort_order: col.sort_order,
-						related_table_id: col.related_table_id
+						related_table_id: col.related_table_id,
+						is_visible: col.is_visible
 					});
 				}
 			}
@@ -336,7 +363,8 @@
 								title: col.title,
 								type: col.type,
 								sort_order: col.sort_order,
-								related_table_id: col.related_table_id
+								related_table_id: col.related_table_id,
+								is_visible: col.is_visible
 							});
 						} else {
 							await metadata.saveOrUpdateColumn(subId, 'new', {
@@ -344,7 +372,8 @@
 								title: col.title,
 								type: col.type,
 								sort_order: col.sort_order,
-								related_table_id: col.related_table_id
+								related_table_id: col.related_table_id,
+								is_visible: col.is_visible
 							});
 						}
 					}
@@ -433,14 +462,28 @@
 				<table class="config-table" border="1">
 					<thead>
 						<tr
-							><th>Имя</th><th>Заголовок</th><th>Тип реквизита</th><th style="width:80px;"
-								>Действия</th
-							></tr
+							><th style="width:80px;">Порядок</th><th>Имя</th><th>Заголовок</th><th
+								>Тип реквизита</th
+							><th style="width:70px;">Действия</th></tr
 						>
 					</thead>
 					<tbody>
-						{#each headerColumns.filter((c) => !c.deleted) as col}
+						{#each visibleHeaderColumns as col, i}
 							<tr class:editing-row={editingColKey === col.key}>
+								<td class="text-center">
+									<button
+										onclick={() => handleMoveColumn('main', col, -1)}
+										class="btn-icon-edit"
+										title="Переместить выше"
+										disabled={i === 0}>▲</button
+									>
+									<button
+										onclick={() => handleMoveColumn('main', col, 1)}
+										class="btn-icon-edit"
+										title="Переместить ниже"
+										disabled={i === visibleHeaderColumns.length - 1}>▼</button
+									>
+								</td>
 								<td>{col.name}</td>
 								<td>{col.title}</td>
 								<td>{fieldTypeLabel(col.type)}</td>
@@ -799,6 +842,10 @@
 	}
 	.btn-icon-edit:hover {
 		opacity: 0.6;
+	}
+	.btn-icon-edit:disabled {
+		opacity: 0.3;
+		cursor: default;
 	}
 	.editing-row {
 		background-color: #fef9c3 !important;

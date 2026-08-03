@@ -91,7 +91,25 @@
 		{disabled}
 		class="lookup-input"
 		class:active-focus={isOpen}
+		class:has-clear={!!displayValue && !disabled}
 	/>
+
+	{#if displayValue && !disabled}
+		<button
+			type="button"
+			class="lookup-clear"
+			title="Очистить"
+			aria-label="Очистить"
+			onclick={(e) => {
+				e.stopPropagation();
+				value = '';
+				isOpen = false;
+				searchQuery = '';
+			}}
+		>
+			✕
+		</button>
+	{/if}
 
 	{#if isOpen && !disabled}
 		<div class="lookup-dropdown">
@@ -131,6 +149,27 @@
 		cursor: not-allowed;
 		color: #475569;
 		background-color: #f8fafc;
+	}
+	.lookup-input.has-clear {
+		padding-right: 26px;
+	}
+	.lookup-clear {
+		position: absolute;
+		right: 4px;
+		top: 50%;
+		transform: translateY(-50%);
+		background: none;
+		border: none;
+		cursor: pointer;
+		font-size: 0.75rem;
+		line-height: 1;
+		color: #94a3b8;
+		padding: 4px;
+		border-radius: 4px;
+	}
+	.lookup-clear:hover {
+		color: #dc2626;
+		background: #f1f5f9;
 	}
 	.active-focus {
 		background: #fef08a !important;

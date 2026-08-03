@@ -35,7 +35,9 @@ export interface LocalColumn {
 		| 'birth'
 		| 'jsonb'
 		| 'link'
-		| 'parent_link';
+		| 'parent_link'
+		| 'file'
+		| 'zip';
 	related_table_id?: string;
 	related_table_name?: string;
 	sort_order: number;

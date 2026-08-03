@@ -1,21 +1,61 @@
 <script lang="ts">
 	import { workspace } from '$lib/state/workspace.svelte';
 	import { syncService } from '$lib/services/sync';
+	import { db } from '$lib/db/indexeddb';
 	import DynamicList from '../dynamic/DynamicList.svelte';
 	import DynamicForm from '../dynamic/DynamicForm.svelte';
 	import ConfiguratorForm from '../dynamic/ConfiguratorForm.svelte';
 
 	let syncing = $state(false);
-	let lastSyncLabel = $state<string | null>(null);
 
+	// Полное обновление: выталкиваем локальные изменения, очищаем локальный кэш
+	// и перезагружаем страницу, чтобы браузер загрузил свежие модули и данные
 	async function handleSync() {
 		if (syncing) return;
+		if (!navigator.onLine) {
+			alert('Нет соединения с сервером. Полное обновление невозможно.');
+			return;
+		}
+		if (
+			!confirm(
+				'Полное обновление:\n1. Отправить локальные изменения на сервер\n2. Очистить локальные данные и кэш\n3. Перезагрузить приложение'
+			)
+		)
+			return;
 		syncing = true;
-		await syncService.runFullSync();
-		syncing = false;
-		lastSyncLabel = navigator.onLine
-			? `Обновлено ${new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}`
-			: 'Нет соединения';
+		try {
+			// 1. Сначала отправляем локальные изменения на сервер
+			await syncService.runFullSync();
+
+			// 2. Очищаем локальный кэш IndexedDB (свежие данные подтянутся при старте)
+			await db.transaction(
+				'rw',
+				[db.meta_tables, db.meta_columns, db.data_records, db.data_lines, db.table('print_forms')],
+				async () => {
+					await db.meta_tables.clear();
+					await db.meta_columns.clear();
+					await db.data_records.clear();
+					await db.data_lines.clear();
+					await db.table('print_forms').clear();
+				}
+			);
+
+			// 3. Сбрасываем HTTP-кэш браузера (модули приложения)
+			if ('caches' in window) {
+				const keys = await caches.keys();
+				await Promise.all(keys.map((k) => caches.delete(k)));
+			}
+
+			// 4. Жёсткая перезагрузка: новый URL, чтобы страница не взялась из кэша.
+			// После загрузки приложение само выполнит полную синхронизацию (см. +page.svelte)
+			const url = new URL(location.href);
+			url.searchParams.set('hard', String(Date.now()));
+			location.replace(url.toString());
+		} catch (e: any) {
+			console.error('Ошибка полного обновления:', e);
+			alert(`Ошибка полного обновления: ${e?.message ?? e}`);
+			syncing = false;
+		}
 	}
 </script>
 
@@ -35,14 +75,10 @@
 			class="sync-btn"
 			class:syncing
 			disabled={syncing}
-			title={lastSyncLabel ?? 'Синхронизировать с сервером'}
+			title="Полное обновление: синхронизация + очистка локального кэша + перезагрузка"
 		>
 			{syncing ? '⏳' : '🔄'}
 		</button>
-		{#if lastSyncLabel}
-			<span class="sync-label" class:offline={!navigator.onLine}>{lastSyncLabel}</span>
-		{/if}
-
 		{#if workspace.tabs.length === 0}
 			<div class="tabs-empty-text">Нет открытых окон. Выберите раздел слева.</div>
 		{/if}
@@ -152,15 +188,6 @@
 	.sync-btn:disabled {
 		cursor: default;
 		opacity: 0.6;
-	}
-	.sync-label {
-		font-size: 0.75rem;
-		color: #64748b;
-		white-space: nowrap;
-		flex-shrink: 0;
-	}
-	.sync-label.offline {
-		color: #dc2626;
 	}
 	.tabs-empty-text {
 		font-size: 0.85rem;

@@ -7,6 +7,7 @@
 	import { formatFieldValue } from '$lib/fields';
 	import { physicalDeleteRecords } from '$lib/services/records';
 	import { runActionCode, saveRecordWithLines } from '$lib/services/actionRunner';
+	import { metadata } from '$lib/state/metadata';
 	import { supabase } from '$lib/db/supabase';
 	import { liveQuery } from 'dexie';
 	import Toolbar from './Toolbar.svelte';
@@ -16,7 +17,8 @@
 	const isCoarse = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
 
 	let tableMeta = $state<LocalTable | null>(null);
-	let columns = $state<LocalColumn[]>([]);
+	let allColumns = $state<LocalColumn[]>([]);
+	let columns = $derived(allColumns.filter((col) => col.is_visible !== false));
 	let records = $state<LocalRecord[]>([]);
 	let selectedIds = $state<string[]>([]);
 	let openMenuId = $state<string | null>(null);
@@ -62,12 +64,11 @@
 		});
 
 		const colObservable = liveQuery(async () => {
-			const allCols = await db.meta_columns.where('table_id').equals(tableId).sortBy('sort_order');
-			return allCols.filter((col) => col.is_visible !== false);
+			return await db.meta_columns.where('table_id').equals(tableId).sortBy('sort_order');
 		});
 		const colSub = colObservable.subscribe({
 			next: (data) => {
-				columns = data;
+				allColumns = data;
 			},
 			error: (err) => console.error('Ошибка загрузки колонок:', err)
 		});
@@ -399,7 +400,15 @@
 </script>
 
 <div class="list-container">
-	<Toolbar mode="list" {tableId} onAction={handleAction} />
+	<Toolbar
+		mode="list"
+		{tableId}
+		onAction={handleAction}
+		columns={allColumns}
+		onToggleColumn={async (colId: string, visible: boolean) => {
+			await metadata.setColumnVisibility(colId, visible);
+		}}
+	/>
 
 	{#if isHierarchical}
 		<div class="hierarchy-breadcrumbs">

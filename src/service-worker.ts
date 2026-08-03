@@ -26,19 +26,17 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
 	if (event.request.method !== 'GET') return;
+	// Network-first: сначала берём свежий ответ с сервера (важно в dev, где URL модулей
+	// не хешируются), кэшируем успешные ответы и отдаём кэш только при офлайне.
 	event.respondWith(
-		caches.match(event.request).then((cached) => {
-			return (
-				cached ||
-				fetch(event.request).then((response) => {
-					return caches.open(CACHE).then((cache) => {
-						if (response.ok && event.request.url.startsWith(self.location.origin)) {
-							cache.put(event.request, response.clone());
-						}
-						return response;
-					});
-				})
-			);
-		})
+		fetch(event.request)
+			.then((response) => {
+				if (response.ok && event.request.url.startsWith(self.location.origin)) {
+					const copy = response.clone();
+					caches.open(CACHE).then((cache) => cache.put(event.request, copy));
+				}
+				return response;
+			})
+			.catch(() => caches.match(event.request))
 	);
 });

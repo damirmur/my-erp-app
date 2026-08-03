@@ -125,6 +125,7 @@ class MetadataManager {
 			type: string;
 			sort_order: number;
 			related_table_id?: string | null;
+			is_visible?: boolean;
 		}
 	) {
 		let result;
@@ -136,6 +137,19 @@ class MetadataManager {
 			result = await supabase.from('meta_columns').update(columnData).eq('id', colId);
 		}
 		if (result.error) alert(`Ошибка сохранения реквизита: ${result.error.message}`);
+	}
+
+	// Переключение видимости реквизита в журнале (пишем сразу на сервер и в локальный кэш,
+	// чтобы изменение не было затёрто следующим pullMetadata)
+	async setColumnVisibility(colId: string, is_visible: boolean) {
+		const { error } = await supabase.from('meta_columns').update({ is_visible }).eq('id', colId);
+		if (error) {
+			alert(`Ошибка сохранения видимости: ${error.message}`);
+			return false;
+		}
+		const col = await db.meta_columns.get(colId);
+		if (col) await db.meta_columns.put({ ...col, is_visible });
+		return true;
 	}
 
 	async updateTableConfig(tableId: string, config: Record<string, any>): Promise<string | null> {

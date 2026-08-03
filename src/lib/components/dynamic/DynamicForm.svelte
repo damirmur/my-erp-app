@@ -486,8 +486,8 @@
 		overflow-y: auto;
 	}
 	.form-grid {
-		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+		display: flex;
+		flex-direction: column;
 		gap: 12px;
 		margin-bottom: 1.5rem;
 	}
@@ -495,6 +495,12 @@
 		display: flex;
 		flex-direction: column;
 		gap: 4px;
+	}
+	.form-field :global(input),
+	.form-field :global(textarea),
+	.form-field :global(select) {
+		width: 100%;
+		box-sizing: border-box;
 	}
 	.form-field label {
 		font-size: 0.8rem;

@@ -267,7 +267,7 @@ function messageRecipientColumns(counterpartiesId: string, channelsId: string): 
 // Создать таблицу (Supabase + локальный кэш), если её нет. Возвращает её id.
 // Локально приводим к одной канонической строке по name (как «История»),
 // чтобы уникальный индекс name в IndexedDB не выдавал ConstraintError.
-async function ensureTable(
+export async function ensureTable(
 	name: string,
 	title: string,
 	type: string,
@@ -355,7 +355,7 @@ async function ensureTable(
 // Колонки таблицы: проверяет и создаёт недостающие на сервере (если онлайн)
 // и локально. Идемпотентно — добавляются только отсутствующие по name, поэтому
 // новые колонки (например, «Прокси») появляются и у уже существующей таблицы.
-async function ensureColumns(
+export async function ensureColumns(
 	tableId: string,
 	columns: ColumnSeed[],
 	online: boolean
@@ -418,7 +418,7 @@ async function hasServerRows(tableId: string, online: boolean): Promise<boolean>
 
 // id таблицы по name (сначала сервер, потом локальный кэш). Для «Контрагентов»:
 // таблица существует на сервере, но в пустом локальном кэше её ещё может не быть.
-async function findTableIdByName(name: string): Promise<string | null> {
+export async function findTableIdByName(name: string): Promise<string | null> {
 	const online = typeof navigator === 'undefined' || navigator.onLine;
 	if (online) {
 		try {

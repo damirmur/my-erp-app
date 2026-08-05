@@ -3,7 +3,7 @@ import { supabase } from '$lib/db/supabase';
 import { linkApi } from '$lib/services/deeplink';
 
 // Контекст, передаваемый в пользовательский код действия «Выполнить».
-// Доступно из кода: record, records, lines, db, supabase, save(), log(), link, apiCall().
+// Доступно из кода: record, records, lines, db, supabase, save(), log(), link, apiCall(), run().
 export interface RunActionContext {
 	record: LocalRecord | null; // Текущая запись (в форме — открытая; в списке — первая выбранная)
 	records: LocalRecord[]; // Выбранные записи (в форме — [record])
@@ -14,10 +14,11 @@ export interface RunActionContext {
 	log: (...args: unknown[]) => void;
 	link: typeof linkApi; // Генерация уникальных ссылок и получение значений по ним
 	apiCall: typeof apiCall; // Вызов внешнего API по записи справочника «Сервисы API»
+	run: (tableName: string, recordId: string) => Promise<unknown>; // Выполнить код действия другой таблицы
 }
 
 // Выполнение JS-кода действия в браузере. Код — тело async-функции.
-// Переменные контекста (record, records, lines, db, supabase, save, log, link, apiCall)
+// Переменные контекста (record, records, lines, db, supabase, save, log, link, apiCall, run)
 // доступны в коде как локальные имена без префикса ctx.
 export async function runActionCode(code: string, ctx: RunActionContext): Promise<unknown> {
 	const paramNames = [
@@ -29,11 +30,36 @@ export async function runActionCode(code: string, ctx: RunActionContext): Promis
 		'save',
 		'log',
 		'link',
-		'apiCall'
+		'apiCall',
+		'run'
 	];
 	const values = paramNames.map((k) => (ctx as unknown as Record<string, unknown>)[k]);
 	const fn = new Function(...paramNames, `return (async () => {\n${code}\n})();`);
 	return await fn(...values);
+}
+
+// Хелпер «Выполнить»: запускает код действия другой таблицы по её имени
+// (например, run('notify_messages', id) — отправить созданное «Сообщение»).
+export async function runAnotherTable(tableName: string, recordId: string): Promise<unknown> {
+	const table = await db.meta_tables.where('name').equals(tableName).first();
+	if (!table) throw new Error('Нет таблицы ' + tableName);
+	const code = table.config?.runCode;
+	if (!code?.trim()) throw new Error('У таблицы ' + tableName + ' не задан код действия');
+	const record = await db.data_records.get(recordId);
+	if (!record) throw new Error('Запись не найдена: ' + recordId);
+	const lines = await db.data_lines.where('record_id').equals(recordId).toArray();
+	return await runActionCode(code, {
+		record,
+		records: [record],
+		lines,
+		db,
+		supabase,
+		save: saveRecordWithLines,
+		log: (...args) => console.log('[Выполнить]', ...args),
+		link: linkApi,
+		apiCall,
+		run: runAnotherTable
+	});
 }
 
 // Шлюз astro3d по умолчанию (для старых записей с use_proxy=true). Для новых

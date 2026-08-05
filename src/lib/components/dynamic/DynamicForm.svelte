@@ -4,7 +4,12 @@
 	import { printerService } from '$lib/services/printer';
 	import { numberService } from '$lib/services/numbers';
 	import { physicalDeleteRecords } from '$lib/services/records';
-	import { apiCall, runActionCode, saveRecordWithLines } from '$lib/services/actionRunner';
+	import {
+		apiCall,
+		runActionCode,
+		runAnotherTable,
+		saveRecordWithLines
+	} from '$lib/services/actionRunner';
 	import { supabase } from '$lib/db/supabase';
 	import { isReadOnly, findParentColumn } from '$lib/table-types';
 	import { fieldRegistry } from '$lib/fields';
@@ -364,7 +369,8 @@
 				save: saveRecordWithLines,
 				log: (...args) => console.log('[Выполнить]', ...args),
 				link: linkApi,
-				apiCall
+				apiCall,
+				run: runAnotherTable
 			});
 			const updated = await db.data_records.get(recordId);
 			if (updated) {

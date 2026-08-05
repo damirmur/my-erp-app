@@ -6,7 +6,12 @@
 	import { getTableType, getEffectiveConfig, findParentColumn } from '$lib/table-types';
 	import { formatFieldValue } from '$lib/fields';
 	import { physicalDeleteRecords } from '$lib/services/records';
-	import { apiCall, runActionCode, saveRecordWithLines } from '$lib/services/actionRunner';
+	import {
+		apiCall,
+		runActionCode,
+		runAnotherTable,
+		saveRecordWithLines
+	} from '$lib/services/actionRunner';
 	import { metadata } from '$lib/state/metadata';
 	import { supabase } from '$lib/db/supabase';
 	import { buildRecordUrl, fullUrlFor, linkApi } from '$lib/services/deeplink';
@@ -407,7 +412,8 @@
 				save: saveRecordWithLines,
 				log: (...args) => console.log('[Выполнить]', ...args),
 				link: linkApi,
-				apiCall
+				apiCall,
+				run: runAnotherTable
 			});
 		} catch (e: any) {
 			alert(`Ошибка выполнения кода: ${e?.message ?? e}`);

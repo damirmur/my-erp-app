@@ -2,6 +2,7 @@ import { supabase } from '$lib/db/supabase';
 import { db, type LocalColumn } from '$lib/db/indexeddb';
 import { getTableType } from '$lib/table-types';
 import { ensureNotificationTables } from '$lib/state/notifications';
+import { ensureSchedulerTables } from '$lib/state/scheduler';
 
 // Имя системной таблицы-истории действий. Уникально в meta_tables, используется
 // для поиска таблицы и в recordHistory/clearHistory/сайдбаре.
@@ -124,6 +125,10 @@ class MetadataManager {
 		// Справочники и документ модуля уведомлений (провайдеры, каналы, получатели, сообщения).
 		// Идемпотентно создаются так же, как «История»: при старте и перед каждым синком.
 		await ensureNotificationTables();
+
+		// Документ «Расписание» для периодической рассылки (например, погоды).
+		// Исполняет Go-сервер 24/7; здесь создаются только метаданные таблиц.
+		await ensureSchedulerTables();
 	}
 
 	// Колонки истории: проверяет и создаёт на сервере (если онлайн) и локально.

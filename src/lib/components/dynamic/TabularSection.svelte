@@ -1,11 +1,34 @@
 <script lang="ts">
-	import { db, type LocalLine, type LocalColumn } from '$lib/db/indexeddb';
+	import { db, type LocalLine, type LocalColumn, type LocalRecord } from '$lib/db/indexeddb';
 	import { fieldRegistry } from '$lib/fields';
 	import { defaultBirth } from '$lib/fields/birth';
+	import { buildLineUrl, fullUrlFor } from '$lib/services/deeplink';
 	import './erpTable.css';
-	let { lines = $bindable([]), onChange = null, readOnly = false, tableId = '' } = $props();
+	let {
+		lines = $bindable([]),
+		onChange = null,
+		readOnly = false,
+		tableId = '',
+		focusLineId = ''
+	} = $props();
 	let selectedLineId = $state<string | null>(null);
 	let columns = $state<LocalColumn[]>([]);
+
+	// При открытии формы по ссылке на строку — сразу выделяем эту строку
+	$effect(() => {
+		if (focusLineId) selectedLineId = focusLineId;
+	});
+
+	async function copyLineLink() {
+		if (!selectedLineId) return;
+		const url = fullUrlFor(buildLineUrl(selectedLineId));
+		try {
+			await navigator.clipboard.writeText(url);
+			alert('Ссылка на строку скопирована: ' + url);
+		} catch {
+			alert('Не удалось скопировать ссылку: ' + url);
+		}
+	}
 
 	// Авторасчёт суммы (как в документах): если в ТЧ есть колонки price/quantity/amount
 	let hasAmountAuto = $derived(
@@ -64,9 +87,9 @@
 		line.data.amount = Number((qty * prc).toFixed(2));
 	}
 
-	function handleLinkSelect(line: LocalLine, data: Record<string, any>) {
-		if (columns.some((c) => c.name === 'price') && data?.price != null) {
-			line.data.price = parseFloat(data.price) || 0;
+	function handleLinkSelect(line: LocalLine, rec: LocalRecord | null) {
+		if (columns.some((c) => c.name === 'price') && rec?.data?.price != null) {
+			line.data.price = parseFloat(rec.data.price) || 0;
 		}
 		recomputeAmount(line);
 	}
@@ -91,6 +114,14 @@
 		>
 			❌ Удалить строку
 		</button>
+		<button
+			onclick={copyLineLink}
+			class="btn-add"
+			disabled={!selectedLineId}
+			title="Скопировать ссылку на выделенную строку"
+		>
+			🔗 Копировать ссылку строки
+		</button>
 	</div>
 
 	<table class="erp-table">
@@ -111,7 +142,10 @@
 						class="tabular-row"
 						class:selected={selectedLineId === line.id}
 						onclick={() => {
-							if (!readOnly) selectedLineId = line.id;
+							// Выделение строки работает всегда, независимо от readOnly
+							// (проведён документ или нет) — редактирование полей
+							// ограничивается отдельно через disabled у полей.
+							selectedLineId = line.id;
 						}}
 					>
 						<td class="text-center">{index + 1}</td>

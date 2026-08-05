@@ -11,7 +11,7 @@
 	} = $props<{
 		value: string;
 		targetTableId: string;
-		onSelect?: ((data: Record<string, unknown>) => void) | null;
+		onSelect?: ((record: LocalRecord) => void) | null;
 		disabled?: boolean;
 	}>();
 
@@ -20,8 +20,30 @@
 	let suggestions = $state<LocalRecord[]>([]);
 	let dropdownRef = $state<HTMLDivElement | null>(null);
 
-	// displayValue теперь просто читает деструктурированное значение value
-	let displayValue = $derived(value ?? '');
+	// Значение поля — id выбранной записи (как в 1С: «Ссылка» = id).
+	// displayName — наименование этой записи для отображения в закрытом состоянии.
+	let displayName = $state('');
+
+	$effect(() => {
+		if (isOpen || !value || !targetTableId) {
+			if (!isOpen) displayName = '';
+			return;
+		}
+		let cancelled = false;
+		db.data_records
+			.get(value)
+			.then((r) => {
+				if (cancelled) return;
+				// Если записи нет (старые данные хранили имя, а не id) — показываем сырое значение
+				displayName = r?.data?.name ?? String(value);
+			})
+			.catch(() => {
+				if (!cancelled) displayName = String(value);
+			});
+		return () => {
+			cancelled = true;
+		};
+	});
 
 	// Подписка на живой поиск в IndexedDB
 	$effect(() => {
@@ -48,12 +70,13 @@
 	});
 
 	function handleSelect(record: LocalRecord) {
-		value = record.data.name; // Прямая мутация переменной, разрешенной для $bindable
+		value = record.id; // Прямая мутация переменной, разрешенной для $bindable
+		displayName = record.data?.name ?? '';
 		isOpen = false;
 		searchQuery = '';
 
 		if (onSelect) {
-			onSelect(record.data);
+			onSelect(record);
 		}
 	}
 
@@ -73,7 +96,7 @@
 	<!-- Используем наши вычисляемые реактивные переменные -->
 	<input
 		type="text"
-		value={isOpen ? searchQuery : displayValue}
+		value={isOpen ? searchQuery : displayName}
 		oninput={(e) => {
 			const target = e.target as HTMLInputElement;
 			if (isOpen) {
@@ -91,10 +114,10 @@
 		{disabled}
 		class="lookup-input"
 		class:active-focus={isOpen}
-		class:has-clear={!!displayValue && !disabled}
+		class:has-clear={!!displayName && !disabled}
 	/>
 
-	{#if displayValue && !disabled}
+	{#if displayName && !disabled}
 		<button
 			type="button"
 			class="lookup-clear"
@@ -103,6 +126,7 @@
 			onclick={(e) => {
 				e.stopPropagation();
 				value = '';
+				displayName = '';
 				isOpen = false;
 				searchQuery = '';
 			}}

@@ -6,7 +6,7 @@ Offline-first ERP metadata constructor. Inspired by 1С:Предприятие �
 
 **Stack**: Svelte 5 (runes) + SvelteKit 2, Dexie/IndexedDB (offline), Supabase (cloud sync).
 
-**Single route** (`/`). Tab-based workspace — no URL routing.
+**Single route** (`/`). Tab-based workspace. Deep links via URL **hash** (`#/t/…`, `#/r/…`, `#/l/…`) — see [Deep Links](#deep-links-unique-references).
 
 ---
 
@@ -29,6 +29,7 @@ my-erp-app/
 │       │   ├── records.ts          # Physical (irreversible) record deletion, server + Dexie
 │       │   ├── files.ts            # File/ZIP helpers: base64<->Blob, size check (20 MB), download
 │       │   ├── actionRunner.ts     # «Выполнить»: executes user JS code (config.runCode) in browser
+│       │   ├── deeplink.ts         # Unique hash links (#/t/, #/r/, #/l/) — parse/build/resolve values
 │       │   ├── printer.ts          # HTML template batch printing
 │       │   └── numbers.ts          # Auto-numbering (prefix + padded digits)
 │       ├── state/
@@ -125,6 +126,65 @@ ConfiguratorForm calls Supabase `.insert/update/delete` directly, then `syncServ
 
 ---
 
+## Deep Links (unique references)
+
+Every table, record, and tabular-section row has a **unique hash link** that opens it and exposes its values. Links work offline (hash is client-side, no server round-trip) and survive reload/refresh.
+
+### URL scheme
+
+| Link             | Opens                                                       | Resolved from         |
+| ---------------- | ----------------------------------------------------------- | --------------------- |
+| `#/t/{tableId}`  | List of a table (accepts id **or** unique `name` slug)      | `meta_tables`         |
+| `#/r/{recordId}` | Record form                                                 | `data_records`        |
+| `#/l/{lineId}`   | Parent record form with the ТЧ row selected (`focusLineId`) | `data_lines` → record |
+
+The hash mirrors the **active tab**: switching tabs updates the address via `replaceState` from `$app/navigation` (no history spam, no `hashchange`), browser back/forward and manual link pasting work through the `hashchange` listener in `+page.svelte`.
+
+### Getting field values
+
+Record values live in `record.data` (JSONB header; keys = column `name`s); ТЧ rows are in `lines[].data`. Get them from:
+
+**1. `runCode` (action «▶️ Выполнить`)** — the `link` helper is in scope:
+
+```js
+const r = await link.get('#/r/d2856fee-e1f1-42a7-a915-be7cf56e4b30');
+log(r.table.title); // e.g. «Накладная»
+log(r.record.data.number); // field value by column name
+log(r.record.data.name);
+log(r.columns.map((c) => c.name)); // column names
+log(r.lines); // ТЧ rows
+```
+
+`link.record(id)` / `link.line(id)` / `link.table(id)` generate links; `await link.get(href)` returns values.
+
+**2. Any app module** (`src/lib/services/deeplink.ts`):
+
+```ts
+import { resolveUrl } from '$lib/services/deeplink';
+const resolved = await resolveUrl('#/r/d2856fee-e1f1-42a7-a915-be7cf56e4b30');
+const value = resolved?.kind === 'record' ? resolved.record.data : null;
+```
+
+**3. In the browser** — pasting the link opens the form and shows the fields in the UI.
+
+Result type is `ResolvedLink` (discriminated union: `list` | `record` | `line` — see `deeplink.ts`). Resolution reads **only IndexedDB** (no network). Returns `null` if the object or its table no longer exists.
+
+### Copy-link UI
+
+- `DynamicList` row menu ⋮ → «🔗 Копировать ссылку»
+- `DynamicForm` toolbar row → «🔗 Копировать ссылку на запись»
+- `TabularSection` → «🔗 Копировать ссылку строки» (on the selected row)
+
+### Action history («🕘 История»)
+
+History is a **real system table** (`meta_tables.name = 'history'`, `type = 'system'`, hidden from main-mode groups via `config.hiddenInMain`). It is seeded idempotently by `metadata.ensureSystemTables()` (Supabase + local IndexedDB cache) at app start (`+page.svelte`) and at the beginning of each `runFullSync` cycle, before `pullMetadata`.
+
+Each opened list/record/line is recorded as a `data_records` row of that table by `workspace.recordHistory(tableId, title, link)` (skips system tables themselves). Record shape: `data = { object_title, link, opened_at }`. Deduped by `link`, capped at 50 rows. Rows are ordinary records, so they sync to Supabase like any other data. `workspace.clearHistory()` removes them locally and on the server.
+
+The Sidebar «🕘 История» button (main mode) opens the table as a `DynamicList`. There, rows don't open a form: `DynamicList.openRecord` special-cases `type === 'system'` and reopens the linked object via `record.data.link` → `workspace.openFromLink()`. The list sorts by `opened_at` descending by default.
+
+---
+
 ## Table Types System (Plugin Architecture)
 
 Each table type defines its own:
@@ -160,7 +220,8 @@ Each table type defines its own:
 - Executed **in the browser** by `runActionCode(code, ctx)` (`actionRunner.ts`):
   `new Function(...paramNames, 'return (async () => {...})()')` — code is an async body
 - Variables available to user code without prefix: `record` (LocalRecord), `records` (selected), `lines` (ТЧ rows),
-  `db` (Dexie), `supabase`, `save(record, lines?)` (marks `is_dirty: 1`), `log(...args)` (console)
+  `db` (Dexie), `supabase`, `save(record, lines?)` (marks `is_dirty: 1`), `log(...args)` (console),
+  `link` (deep-link helpers — `link.get(href)` returns values, `link.record/line/table(id)` generate links)
 - Example: `record.data.total_amount = 42; await save(record);`
 - After form execution DynamicForm re-reads the record and refreshes `recordData`
 
@@ -272,6 +333,7 @@ Runtime `ActionDef` uses function predicates: `show?: (status) => boolean`. DB s
 
 - **Svelte 5 runes enforced** (`vite.config.ts`): `$state`, `$derived`, `$effect`, `$props`, `$bindable`. No `export let`, no `on:click`.
 - **Configurator magic string**: `'SYSTEM_CONFIUGRATOR_ID'` (deliberate typo — must match in Sidebar and Workspace).
+- **Deep links use hash** (`#/t/`, `#/r/`, `#/l/`) — do NOT introduce real routes: offline-first + SW make server-side fallback impractical. Keep everything in `deeplink.ts` (`parseHash`/`buildUrl`/`resolveLink`/`linkApi`).
 - **Prettier only**: tabs, single quotes, no trailing commas, 100 width. No ESLint.
 - **Dev server**: `10.66.66.9:5173` (LAN IP, not localhost).
 - **Russian UI**: all labels, comments, statuses in Russian.

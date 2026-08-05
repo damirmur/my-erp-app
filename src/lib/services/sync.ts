@@ -1,5 +1,12 @@
 import { supabase } from '$lib/db/supabase';
 import { db, type LocalRecord, type LocalLine } from '$lib/db/indexeddb';
+import { metadata } from '$lib/state/metadata';
+import { seedNotificationDefaults } from '$lib/state/notifications';
+
+// Ключ в localStorage: максимальная серверная updated_at из последнего pull.
+// Не зависит от локальных записей, поэтому сиды/история не могут сдвинуть
+// границу загрузки (иначе после полного обновления пропадали бы старые записи).
+const SYNC_ANCHOR_KEY = 'erp_last_pull_anchor';
 
 export const syncService = {
 	// 1. Инициализация и скачивание метаданных (конфигурации системы)
@@ -10,6 +17,16 @@ export const syncService = {
 			const { data: tables, error: tError } = await supabase.from('meta_tables').select('*');
 
 			if (tError) throw tError;
+
+			// В IndexedDB на name стоит уникальный индекс, поэтому дубликаты имён
+			// (могли остаться на сервере из старых версий) убираем, оставляя первый.
+			const seenNames = new Set<string>();
+			const uniqueTables = (tables ?? []).filter((t) => {
+				const key = t.name ?? t.id;
+				if (seenNames.has(key)) return false;
+				seenNames.add(key);
+				return true;
+			});
 
 			// Скачиваем структуру колонок
 			const { data: columns, error: cError } = await supabase
@@ -33,7 +50,7 @@ export const syncService = {
 					await db.meta_columns.clear();
 					await db.table('print_forms').clear(); // Очищаем старые макеты перед обновлением
 
-					if (tables) await db.meta_tables.bulkPut(tables);
+					if (uniqueTables) await db.meta_tables.bulkPut(uniqueTables);
 					if (columns) await db.meta_columns.bulkPut(columns);
 					if (pForms) await db.table('print_forms').bulkPut(pForms); // Сохраняем новые макеты в IndexedDB
 				}
@@ -48,9 +65,16 @@ export const syncService = {
 	// 2. Скачивание новых и измененных данных (Шапки и строки документов/справочников)
 	async pullDataChanges() {
 		try {
-			// Находим дату последнего локального изменения, чтобы не качать всю базу заново
-			const lastRecord = await db.data_records.orderBy('updated_at').last();
-			const lastSyncTime = lastRecord ? lastRecord.updated_at : new Date(0).toISOString();
+			// Якорь последней успешной загрузки хранится в localStorage и НЕ зависит от
+			// локальных записей. Если считать его как max(local.updated_at), свежие метки
+			// сидов/истории сдвинут границу вперёд — и старые серверные записи (которые
+			// локально ещё не скачаны, например после полного обновления) больше не
+			// попадут в кэш. Пустой кэш = полная загрузка, якорь сбрасывается.
+			const localCount = await db.data_records.count();
+			const lastSyncTime =
+				localCount === 0
+					? new Date(0).toISOString()
+					: (localStorage.getItem(SYNC_ANCHOR_KEY) ?? new Date(0).toISOString());
 
 			// Запрашиваем с сервера записи, измененные после нашей последней синхронизации
 			const { data: serverRecords, error: rError } = await supabase
@@ -59,6 +83,16 @@ export const syncService = {
 				.gt('updated_at', lastSyncTime);
 
 			if (rError) throw rError;
+
+			// Продвигаем якорь на максимальную из увиденных серверных меток (нормализуем
+			// к Z), чтобы следующий цикл не скачивал их заново.
+			if (serverRecords && serverRecords.length > 0) {
+				const maxSeen = serverRecords.reduce((m, r) => {
+					const iso = new Date(r.updated_at).toISOString();
+					return iso > m ? iso : m;
+				}, lastSyncTime);
+				localStorage.setItem(SYNC_ANCHOR_KEY, maxSeen);
+			}
 
 			if (serverRecords && serverRecords.length > 0) {
 				// Локально изменённые, но ещё не отправленные на сервер записи не затираем:
@@ -220,9 +254,16 @@ export const syncService = {
 		running = true;
 		console.log('Запуск процесса синхронизации...');
 		try {
+			// Системные таблицы (например, «История») должны существовать до
+			// загрузки метаданных, иначе pullMetadata их сотрёт.
+			await metadata.ensureSystemTables();
 			await this.pullMetadata(); // Сначала конфигурация
 			await this.pushLocalChanges(); // Затем отдаем свои изменения
 			await this.pullDataChanges(); // В конце забираем чужие изменения
+			// Сиды справочников уведомлений — только после загрузки данных,
+			// иначе их свежие updated_at сдвинут вотермарк pullDataChanges и
+			// серверные записи (получатели, сообщения) не попадут в кэш.
+			await seedNotificationDefaults();
 			console.log('Синхронизация завершена.');
 		} finally {
 			running = false;

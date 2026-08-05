@@ -47,8 +47,16 @@ export function formatFieldValue(type: string, raw: any): string {
 	if (type === 'datetime') {
 		const d = new Date(raw);
 		if (isNaN(d.getTime())) return String(raw);
-		const pad = (n: number) => String(n).padStart(2, '0');
-		return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+		return new Intl.DateTimeFormat(undefined, {
+			dateStyle: 'short',
+			timeStyle: 'short'
+		}).format(d);
+	}
+	if (type === 'date' && typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}/.test(raw)) {
+		const d = new Date(`${raw.slice(0, 10)}T00:00:00`);
+		if (!isNaN(d.getTime())) {
+			return new Intl.DateTimeFormat(undefined, { dateStyle: 'short' }).format(d);
+		}
 	}
 	if (type === 'birth' && typeof raw === 'object') {
 		const parts: string[] = [];

@@ -65,6 +65,10 @@
 		return table.config?.hiddenInMain !== true;
 	}
 
+	// Системная таблица «История»: открывается как обычный список (DynamicList),
+	// но её записи ведут на исходные объекты (см. DynamicList.openRecord).
+	let historyTable = $derived(tables.find((t) => t.name === 'history') ?? null);
+
 	// Те же группы, но без скрытых таблиц (для основного режима)
 	let mainModeTablesByType = $derived.by(() => {
 		const map: Record<string, LocalTable[]> = {};
@@ -306,6 +310,29 @@
 			<div class="p-4 text-gray-500 text-sm">Загрузка конфигурации...</div>
 		{:else}
 			<nav class="sidebar-nav">
+				{#if workspace.mode === 'main' && historyTable}
+					<div class="history-section">
+						<div class="group-header-row">
+							<button
+								class="history-open-btn"
+								class:active={workspace.activeTab?.tableId === historyTable.id &&
+									workspace.activeTab?.type === 'list'}
+								onclick={() => workspace.openList(historyTable.id, historyTable.title)}
+								title="Открыть историю действий"
+							>
+								🕘 История
+							</button>
+							<button
+								class="group-add-btn"
+								onclick={() => workspace.clearHistory()}
+								title="Очистить историю"
+							>
+								✕
+							</button>
+						</div>
+					</div>
+				{/if}
+
 				{#if workspace.mode === 'constructor'}
 					<div class="types-section">
 						<div class="group-header-row">
@@ -762,5 +789,33 @@
 		max-width: 90px;
 		overflow: hidden;
 		text-overflow: ellipsis;
+	}
+	.history-section {
+		margin-bottom: 1.25rem;
+		padding-bottom: 0.75rem;
+		border-bottom: 1px solid #e5e7eb;
+	}
+	.history-open-btn {
+		flex: 1;
+		display: flex;
+		align-items: center;
+		background: none;
+		border: none;
+		cursor: pointer;
+		padding: 0.5rem 0.75rem;
+		font-size: 0.9rem;
+		color: #4b5563;
+		border-radius: 0.375rem;
+		transition: background-color 0.2s;
+		text-align: left;
+	}
+	.history-open-btn:hover {
+		background-color: #e5e7eb;
+		color: #1f2937;
+	}
+	.history-open-btn.active {
+		background-color: #e0e7ff;
+		color: #4f46e5;
+		font-weight: 500;
 	}
 </style>

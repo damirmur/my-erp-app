@@ -1,9 +1,24 @@
+import {
+	buildLineUrl,
+	buildListUrl,
+	buildRecordUrl,
+	parseHash,
+	resolveLink
+} from '$lib/services/deeplink';
+import { db } from '$lib/db/indexeddb';
+import { supabase } from '$lib/db/supabase';
+import { HISTORY_TABLE_NAME } from '$lib/state/metadata';
+
+// Максимальная глубина истории действий
+const HISTORY_LIMIT = 50;
+
 // Описываем интерфейс вкладки нашей ERP-системы
 export interface WorkspaceTab {
 	id: string; // Уникальный ID вкладки (например, "list_goods" или "form_invoice_uuid")
 	type: 'list' | 'form'; // Тип вкладки: Список элементов или Форма документа/справочника
 	tableId: string; // ID таблицы метаданных (ссылка на meta_tables.id)
 	recordId?: string; // ID конкретной записи (только для форм)
+	focusLineId?: string; // ID строки табличной части, которую нужно выделить при открытии формы
 	title: string; // Заголовок вкладки (например, "Товары (список)" или "Накладная №5")
 	isDirty: boolean; // Флаг измененности (есть ли несохраненные данные, аналог "*" в 1С)
 }
@@ -22,6 +37,58 @@ class WorkspaceManager {
 	// Вычисляемое свойство через руну $derived: возвращает объект текущего активного таба
 	activeTab = $derived(this.tabs.find((t) => t.id === this.activeTabId) || null);
 
+	// Записать действие в историю. История хранится в системной таблице «История»
+	// (meta_tables.name = 'history') как обычные записи data_records:
+	// data = { object_title, link, opened_at }. Сам открываемый объект не должен
+	// быть системной таблицей, иначе запись зациклится.
+	async recordHistory(tableId: string, title: string, link: string) {
+		try {
+			const meta = await db.meta_tables.get(tableId);
+			if (meta?.type === 'system') return;
+
+			const historyTable = await db.meta_tables.where('name').equals(HISTORY_TABLE_NAME).first();
+			if (!historyTable) return;
+
+			const now = new Date().toISOString();
+			const existing = await db.data_records.where('table_id').equals(historyTable.id).toArray();
+			const duplicate = existing.find((r) => r.data?.link === link);
+
+			await db.transaction('rw', [db.data_records], async () => {
+				if (duplicate) await db.data_records.delete(duplicate.id);
+				await db.data_records.put({
+					id: crypto.randomUUID(),
+					table_id: historyTable.id,
+					status: 'draft',
+					is_folder: false,
+					parent_id: null,
+					data: { object_title: title, link, opened_at: now },
+					is_dirty: 1,
+					updated_at: now
+				});
+				// Ограничиваем глубину истории (свежие записи выше по opened_at)
+				const all = await db.data_records.where('table_id').equals(historyTable.id).toArray();
+				const sorted = all.sort((a, b) =>
+					String(a.data?.opened_at) < String(b.data?.opened_at) ? 1 : -1
+				);
+				for (const r of sorted.slice(HISTORY_LIMIT)) await db.data_records.delete(r.id);
+			});
+		} catch (e) {
+			console.warn('Не удалось записать действие в историю:', e);
+		}
+	}
+
+	// Очистить историю действий (локально и на сервере)
+	async clearHistory() {
+		try {
+			const historyTable = await db.meta_tables.where('name').equals(HISTORY_TABLE_NAME).first();
+			if (!historyTable) return;
+			await db.data_records.where('table_id').equals(historyTable.id).delete();
+			await supabase.from('data_records').delete().eq('table_id', historyTable.id);
+		} catch (e) {
+			console.warn('Не удалось очистить историю:', e);
+		}
+	}
+
 	// 1. Открыть форму списка таблицы (аналог ФормыСписка в 1С)
 	openList(tableId: string, tableTitle: string) {
 		const tabId = `list_${tableId}`;
@@ -30,21 +97,23 @@ class WorkspaceManager {
 		const existingTab = this.tabs.find((t) => t.id === tabId);
 		if (existingTab) {
 			this.activeTabId = tabId;
-			return;
+		} else {
+			// Новое открытие списка сбрасывает подавление автооткрытия формы константы
+			this.constantFormOpened.delete(tableId);
+
+			// Иначе добавляем новую вкладку в массив
+			this.tabs.push({
+				id: tabId,
+				type: 'list',
+				tableId,
+				title: `${tableTitle} (список)`,
+				isDirty: false
+			});
+			this.activeTabId = tabId;
 		}
 
-		// Новое открытие списка сбрасывает подавление автооткрытия формы константы
-		this.constantFormOpened.delete(tableId);
-
-		// Иначе добавляем новую вкладку в массив
-		this.tabs.push({
-			id: tabId,
-			type: 'list',
-			tableId,
-			title: `${tableTitle} (список)`,
-			isDirty: false
-		});
-		this.activeTabId = tabId;
+		// Фиксируем в истории действий (только успешное открытие реальной таблицы)
+		this.recordHistory(tableId, `${tableTitle} (список)`, buildListUrl(tableId));
 	}
 
 	// 2. Открыть форму элемента/документа (аналог ФормыЭлемента/ФормыДокумента в 1С)
@@ -71,6 +140,77 @@ class WorkspaceManager {
 			isDirty: recordId === 'new' // Новая запись сразу считается измененной
 		});
 		this.activeTabId = tabId;
+
+		// В историю попадают только существующие записи (не черновики «Новый»)
+		if (recordId !== 'new') {
+			this.recordHistory(tableId, title, buildRecordUrl(actualRecordId));
+		}
+	}
+
+	// 2.1. Открыть форму записи и выделить в ней строку табличной части.
+	// Открывает (или переиспользует) форму родительской записи и помечает нужную строку.
+	openFormWithLine(
+		tableId: string,
+		recordId: string,
+		tableTitle: string,
+		lineId: string,
+		recordNumber?: string
+	) {
+		const tabId = `form_${tableId}_${recordId}`;
+
+		const existingTab = this.tabs.find((t) => t.id === tabId);
+		if (existingTab) {
+			existingTab.focusLineId = lineId;
+			this.activeTabId = tabId;
+		} else {
+			const title = `${tableTitle} №${recordNumber || '...'}`;
+			this.tabs.push({
+				id: tabId,
+				type: 'form',
+				tableId,
+				recordId,
+				focusLineId: lineId,
+				title,
+				isDirty: false
+			});
+			this.activeTabId = tabId;
+		}
+
+		this.recordHistory(tableId, `${tableTitle} (строка)`, buildLineUrl(lineId));
+	}
+
+	// 2.2. Открыть объект по уникальной ссылке (#/t/..., #/r/..., #/l/...).
+	// Возвращает true, если ссылка распознана и открыта.
+	async openFromLink(linkHash: string): Promise<boolean> {
+		const link = parseHash(linkHash);
+		if (!link) return false;
+
+		if (link.kind === 'list') {
+			const resolved = await resolveLink(link);
+			if (!resolved || resolved.kind !== 'list') return false;
+			this.openList(resolved.table.id, resolved.table.title);
+			return true;
+		}
+
+		if (link.kind === 'record') {
+			const resolved = await resolveLink(link);
+			if (!resolved || resolved.kind !== 'record') return false;
+			const number = resolved.record.data?.number || resolved.record.data?.name;
+			this.openForm(resolved.table.id, resolved.record.id, resolved.table.title, number);
+			return true;
+		}
+
+		const resolved = await resolveLink(link);
+		if (!resolved || resolved.kind !== 'line') return false;
+		const number = resolved.record.data?.number || resolved.record.data?.name;
+		this.openFormWithLine(
+			resolved.table.id,
+			resolved.record.id,
+			resolved.table.title,
+			resolved.line.id,
+			number
+		);
+		return true;
 	}
 
 	// 3. Закрыть вкладку (с проверкой на модифицированность данных)

@@ -1,12 +1,27 @@
 <script lang="ts">
+	import { replaceState } from '$app/navigation';
 	import { workspace } from '$lib/state/workspace.svelte';
 	import { syncService } from '$lib/services/sync';
 	import { db } from '$lib/db/indexeddb';
+	import { buildRecordUrl, buildListUrl } from '$lib/services/deeplink';
 	import DynamicList from '../dynamic/DynamicList.svelte';
 	import DynamicForm from '../dynamic/DynamicForm.svelte';
 	import ConfiguratorForm from '../dynamic/ConfiguratorForm.svelte';
 
 	let syncing = $state(false);
+
+	// Синхронизация адресной строки с активной вкладкой: при переключении вкладки
+	// обновляем hash-часть URL через replaceState из $app/navigation (не создаёт
+	// лишних записей в истории и не триггерит hashchange).
+	$effect(() => {
+		const tab = workspace.activeTab;
+		if (!tab || typeof history === 'undefined') return;
+		if (tab.type === 'list' && tab.tableId !== 'SYSTEM_CONFIUGRATOR_ID') {
+			replaceState(buildListUrl(tab.tableId), {});
+		} else if (tab.type === 'form' && tab.recordId) {
+			replaceState(buildRecordUrl(tab.recordId), {});
+		}
+	});
 
 	// Полное обновление: выталкиваем локальные изменения, очищаем локальный кэш
 	// и перезагружаем страницу, чтобы браузер загрузил свежие модули и данные
@@ -120,6 +135,7 @@
 					tableId={workspace.activeTab.tableId}
 					recordId={workspace.activeTab.recordId}
 					tabId={workspace.activeTab.id}
+					focusLineId={workspace.activeTab.focusLineId ?? ''}
 				/>
 			{/if}
 		{:else}

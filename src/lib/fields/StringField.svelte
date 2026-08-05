@@ -9,7 +9,8 @@
 </script>
 
 {#if disabled && isUrl}
-	<a href={value} target="_blank" rel="noopener noreferrer" class="url-link" title="Открыть ссылку">{value}</a
+	<a href={value} target="_blank" rel="noopener noreferrer" class="url-link" title="Открыть ссылку"
+		>{value}</a
 	>
 {:else}
 	<div class="string-field">
@@ -22,8 +23,7 @@
 				onclick={(e) => {
 					e.stopPropagation();
 					openUrl();
-				}}
-				>🔗</button
+				}}>🔗</button
 			>
 		{/if}
 	</div>

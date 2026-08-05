@@ -10,6 +10,7 @@ import document from './document';
 import template from './template';
 import constant from './constant';
 import tabular from './tabular';
+import system from './system';
 
 export type { TableTypeModule, StatusDef, ActionDef };
 export type { TableConfig };
@@ -21,7 +22,8 @@ const builtinRegistry: Record<string, TableTypeModule> = {
 	document,
 	template,
 	constant,
-	tabular
+	tabular,
+	system
 };
 const defaultType = document;
 

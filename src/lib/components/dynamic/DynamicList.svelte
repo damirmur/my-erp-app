@@ -6,9 +6,10 @@
 	import { getTableType, getEffectiveConfig } from '$lib/table-types';
 	import { formatFieldValue } from '$lib/fields';
 	import { physicalDeleteRecords } from '$lib/services/records';
-	import { runActionCode, saveRecordWithLines } from '$lib/services/actionRunner';
+	import { apiCall, runActionCode, saveRecordWithLines } from '$lib/services/actionRunner';
 	import { metadata } from '$lib/state/metadata';
 	import { supabase } from '$lib/db/supabase';
+	import { buildRecordUrl, fullUrlFor, linkApi } from '$lib/services/deeplink';
 	import { liveQuery } from 'dexie';
 	import Toolbar from './Toolbar.svelte';
 	import './erpTable.css';
@@ -33,6 +34,17 @@
 	let tableType = $derived(tableMeta?.type ?? 'document');
 	let tableTypeDef = $derived(getTableType(tableType));
 	let isHierarchical = $derived(getEffectiveConfig(tableMeta).features.hierarchy);
+
+	// Системные таблицы (например, история действий) по умолчанию сортируем
+	// по дате открытия от новых к старым, а не по колонке "number".
+	$effect(() => {
+		if (tableMeta?.type === 'system' && sortField === 'number' && allColumns.length > 0) {
+			sortField = allColumns.some((c) => c.name === 'opened_at')
+				? 'opened_at'
+				: (allColumns[0]?.name ?? 'number');
+			sortDirection = 'desc';
+		}
+	});
 
 	// Для констант: автоматически создаём единственную запись и открываем её форму.
 	// Подавление повторного открытия живёт в workspace (переживает перемонтирование списка).
@@ -129,6 +141,40 @@
 			sortDirection = 'asc';
 		}
 	}
+
+	// Для link-колонок значение в данных — id записи; в ячейках списка показываем
+	// наименование связанной записи (прекомпьютим мапу id → name текущих строк).
+	let linkDisplay = $state<Record<string, string>>({});
+
+	$effect(() => {
+		const linkCols = columns.filter((c) => c.type === 'link');
+		if (linkCols.length === 0) {
+			linkDisplay = {};
+			return;
+		}
+		const ids = new Set<string>();
+		for (const col of linkCols) {
+			for (const r of filteredAndSortedRecords) {
+				const v = r.data?.[col.name];
+				if (v && typeof v === 'string') ids.add(v);
+			}
+		}
+		const idArr = [...ids];
+		db.data_records
+			.bulkGet(idArr)
+			.then((rows) => {
+				const map: Record<string, string> = {};
+				for (const col of linkCols) {
+					for (const r of filteredAndSortedRecords) {
+						const v = r.data?.[col.name];
+						if (!v) continue;
+						map[`${col.id}:${v}`] = rows.find((row) => row?.id === v)?.data?.name ?? String(v);
+					}
+				}
+				linkDisplay = map;
+			})
+			.catch(() => {});
+	});
 
 	async function handleAction(actionId: string) {
 		switch (actionId) {
@@ -330,7 +376,9 @@
 				db,
 				supabase,
 				save: saveRecordWithLines,
-				log: (...args) => console.log('[Выполнить]', ...args)
+				log: (...args) => console.log('[Выполнить]', ...args),
+				link: linkApi,
+				apiCall
 			});
 		} catch (e: any) {
 			alert(`Ошибка выполнения кода: ${e?.message ?? e}`);
@@ -340,6 +388,26 @@
 	// Ячейка считается ссылкой, если значение начинается с http:// или https://
 	function isHttpUrl(value: unknown): value is string {
 		return typeof value === 'string' && /^https?:\/\//i.test(value.trim());
+	}
+
+	// Форматирование ячейки списка. Для системных таблиц колонка opened_at хранит
+	// полную ISO-метку (в Supabase нет enum datetime), показываем её как дату/время.
+	function formatCell(col: LocalColumn, record: LocalRecord): string {
+		const raw = record.data?.[col.name];
+		if (tableMeta?.type === 'system' && col.name === 'opened_at' && raw) {
+			const d = new Date(raw);
+			if (!isNaN(d.getTime())) {
+				return new Intl.DateTimeFormat(undefined, {
+					dateStyle: 'short',
+					timeStyle: 'short'
+				}).format(d);
+			}
+		}
+		// Ссылка хранит id записи — показываем наименование связанной записи
+		if (col.type === 'link' && raw) {
+			return linkDisplay[`${col.id}:${raw}`] ?? String(raw);
+		}
+		return formatFieldValue(col.type, raw);
 	}
 
 	function toggleSelect(id: string) {
@@ -355,7 +423,25 @@
 				: filteredAndSortedRecords.map((r) => r.id);
 	}
 
+	async function copyRecordLink(record: LocalRecord) {
+		const url = fullUrlFor(buildRecordUrl(record.id));
+		try {
+			await navigator.clipboard.writeText(url);
+			alert('Ссылка на запись скопирована: ' + url);
+		} catch {
+			alert('Не удалось скопировать ссылку: ' + url);
+		}
+	}
+
 	function openRecord(record: LocalRecord) {
+		// Системные таблицы (например, история): запись ведёт на исходный объект
+		// через сохранённую ссылку, а не открывается как обычная форма.
+		if (tableMeta?.type === 'system') {
+			const link = record.data?.link;
+			if (typeof link === 'string' && link) workspace.openFromLink(link);
+			return;
+		}
+
 		if (record.is_folder && isHierarchical) {
 			currentFolderId = record.id;
 			selectedIds = [];
@@ -513,11 +599,10 @@
 												rel="noopener noreferrer"
 												class="cell-link"
 												onclick={(e) => e.stopPropagation()}
-												title="Открыть ссылку"
-												>{formatFieldValue(col.type, record.data[col.name])}</a
+												title="Открыть ссылку">{formatCell(col, record)}</a
 											>
 										{:else}
-											{formatFieldValue(col.type, record.data[col.name])}
+											{formatCell(col, record)}
 										{/if}
 									</td>
 								{/each}
@@ -554,6 +639,19 @@
 												>
 													Открыть
 												</button>
+												{#if !record.is_folder && tableType !== 'system'}
+													<button
+														type="button"
+														class="row-menu-item"
+														onclick={(e) => {
+															e.stopPropagation();
+															openMenuId = null;
+															copyRecordLink(record);
+														}}
+													>
+														🔗 Копировать ссылку
+													</button>
+												{/if}
 												{#if !record.is_folder && tableTypeDef.statuses.some((s) => s.role === 'posted') && record.status !== 'posted'}
 													<button
 														type="button"

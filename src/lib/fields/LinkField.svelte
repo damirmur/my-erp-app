@@ -1,10 +1,11 @@
 <script lang="ts">
 	import LookupInput from '$lib/components/ui/LookupInput.svelte';
+	import type { LocalRecord } from '$lib/db/indexeddb';
 
 	let {
 		value = $bindable(''),
 		disabled = false,
-		onChange = (_data: Record<string, unknown>) => {},
+		onChange = (_record: LocalRecord) => {},
 		relatedTableId = ''
 	} = $props();
 </script>
@@ -13,5 +14,5 @@
 	bind:value
 	targetTableId={relatedTableId}
 	{disabled}
-	onSelect={(data: Record<string, unknown>) => onChange(data)}
+	onSelect={(record: LocalRecord) => onChange(record)}
 />

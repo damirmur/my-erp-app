@@ -4,16 +4,17 @@
 	import { printerService } from '$lib/services/printer';
 	import { numberService } from '$lib/services/numbers';
 	import { physicalDeleteRecords } from '$lib/services/records';
-	import { runActionCode, saveRecordWithLines } from '$lib/services/actionRunner';
+	import { apiCall, runActionCode, saveRecordWithLines } from '$lib/services/actionRunner';
 	import { supabase } from '$lib/db/supabase';
 	import { isReadOnly } from '$lib/table-types';
 	import { fieldRegistry } from '$lib/fields';
 	import { isValidBirthLocal, defaultBirth } from '$lib/fields/birth';
+	import { buildRecordUrl, fullUrlFor, linkApi } from '$lib/services/deeplink';
 	import Toolbar from './Toolbar.svelte';
 	import TabularSection from './TabularSection.svelte';
 	import PeriodsTable from './PeriodsTable.svelte';
 
-	let { tableId, recordId, tabId = '' } = $props();
+	let { tableId, recordId, tabId = '', focusLineId = '' } = $props();
 
 	let columns = $state<LocalColumn[]>([]);
 	let recordData = $state<Record<string, any>>({});
@@ -139,6 +140,15 @@
 		// Populate activeSubTableLines from backup
 		restoreLinesToActive();
 
+		// Если форма открыта по ссылке на строку ТЧ — переключаемся на её табличную часть
+		if (focusLineId) {
+			const focusLine = allLineRows.find((l) => l.id === focusLineId);
+			if (focusLine) {
+				const subIndex = objectSubTables.findIndex((t) => t.id === focusLine.table_id);
+				if (subIndex !== -1) activeSubTabIndex = subIndex;
+			}
+		}
+
 		// Для периодической константы значение в шапке = значение последнего периода
 		if (isPeriodic) {
 			const latest = latestPeriodValue();
@@ -164,6 +174,24 @@
 			const latest = latestPeriodValue();
 			if (latest !== undefined) recordData[mainColName] = latest;
 		}
+	});
+
+	// Если фокус на строке ТЧ сменился (например, вкладка уже была открыта, а пользователь
+	// открыл ссылку на другую строку) — переключаемся на табличную часть этой строки.
+	$effect(() => {
+		if (!focusLineId || objectSubTables.length === 0) return;
+		let cancelled = false;
+		db.data_lines
+			.get(focusLineId)
+			.then((line) => {
+				if (cancelled || !line) return;
+				const subIndex = objectSubTables.findIndex((t) => t.id === line.table_id);
+				if (subIndex !== -1) activeSubTabIndex = subIndex;
+			})
+			.catch(() => {});
+		return () => {
+			cancelled = true;
+		};
 	});
 
 	function markAsDirty() {
@@ -298,6 +326,20 @@
 		}
 	}
 
+	async function copyRecordLink() {
+		if (recordId === 'new') {
+			alert('Сначала сохраните запись, чтобы получить её ссылку.');
+			return;
+		}
+		const url = fullUrlFor(buildRecordUrl(recordId));
+		try {
+			await navigator.clipboard.writeText(url);
+			alert('Ссылка на запись скопирована: ' + url);
+		} catch {
+			alert('Не удалось скопировать ссылку: ' + url);
+		}
+	}
+
 	// ▶️ Выполнить: запуск пользовательского JS-кода по текущей записи
 	async function handleRun() {
 		if (recordId === 'new') return alert('Сначала сохраните запись');
@@ -315,7 +357,9 @@
 				db,
 				supabase,
 				save: saveRecordWithLines,
-				log: (...args) => console.log('[Выполнить]', ...args)
+				log: (...args) => console.log('[Выполнить]', ...args),
+				link: linkApi,
+				apiCall
 			});
 			const updated = await db.data_records.get(recordId);
 			if (updated) {
@@ -403,6 +447,16 @@
 
 <div class="form-container">
 	<Toolbar mode="form" status={recordStatus} {tableId} onAction={handleAction} />
+	<div class="form-link-row">
+		<button
+			type="button"
+			class="btn-link-copy"
+			onclick={() => copyRecordLink()}
+			title="Скопировать уникальную ссылку на эту запись"
+		>
+			🔗 Копировать ссылку на запись
+		</button>
+	</div>
 
 	{#if loading}
 		<div class="p-6">Загрузка формы элемента...</div>
@@ -458,6 +512,7 @@
 									onChange={markAsDirty}
 									{readOnly}
 									tableId={activeSubTable.id}
+									{focusLineId}
 								/>
 							{/if}
 						</div>
@@ -573,5 +628,24 @@
 		color: #16a34a;
 		font-size: 1.1rem;
 		font-weight: 700;
+	}
+	.form-link-row {
+		display: flex;
+		justify-content: flex-end;
+		padding: 4px 12px;
+		background-color: #f8fafc;
+		border-bottom: 1px solid #e2e8f0;
+	}
+	.btn-link-copy {
+		background: none;
+		border: 1px solid #cbd5e1;
+		border-radius: 4px;
+		color: #475569;
+		font-size: 0.75rem;
+		padding: 3px 8px;
+		cursor: pointer;
+	}
+	.btn-link-copy:hover {
+		background-color: #e2e8f0;
 	}
 </style>

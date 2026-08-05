@@ -1,28 +1,37 @@
 import { supabase } from '$lib/db/supabase';
 import { db, type LocalColumn, type LocalRecord } from '$lib/db/indexeddb';
 
-// Модуль уведомлений: каталог «Сервисы API», справочники каналов отправки,
-// получателей и документ «Сообщение» для рассылки через внешний endpoint
-// (например, /api/notify). Таблицы создаются идемпотентно (код-сид) при старте
-// приложения и в начале каждого цикла синхронизации — по паттерну системной
-// таблицы «История».
+// Модуль уведомлений: каталог «Сервисы API», справочник каналов отправки,
+// табличная часть «Контакты» у контрагентов и документ «Сообщение» для
+// рассылки через внешний endpoint (например, /api/notify). Таблицы создаются
+// идемпотентно (код-сид) при старте приложения и в начале каждого цикла
+// синхронизации — по паттерну системной таблицы «История».
 //
-// Ранее каталог назывался notify_providers — переименован в api_services с
-// одноразовой миграцией данных (см. migrateLegacyNotifyProviders).
+// Раньше каталог назывался notify_providers — переименован в api_services с
+// одноразовой миграцией данных (см. migrateLegacyNotifyProviders). Получатели
+// были отдельным справочником notify_recipients с полями tg_id/vk_id/email —
+// теперь это подчинённая контрагентам табличная часть «Контакты»
+// (contragent_contacts), строка = канал + значение. Старый справочник
+// удалён (seed больше не создаёт его).
 
 export const API_SERVICES_TABLE = 'api_services';
 export const NOTIFY_CHANNELS_TABLE = 'notify_channels';
-export const NOTIFY_RECIPIENTS_TABLE = 'notify_recipients';
 export const NOTIFY_MESSAGES_TABLE = 'notify_messages';
 export const NOTIFY_MESSAGE_CHANNELS_TABLE = 'notify_message_channels';
+
+// Табличная часть «Контакты» у контрагентов: строки хранятся в data_lines
+// (record_id = id контрагента), каждая строка = канал отправки + значение.
+export const CONTACT_TABLE = 'contragent_contacts';
 
 const LEGACY_PROVIDERS_TABLE = 'notify_providers';
 
 // Код действия «▶️ Выполнить» документа «Сообщение»: собирает JSON и отправляет
 // через apiCall по записи каталога «Сервисы API». Выполняется в браузере
-// (runActionCode). Поля-ссылки хранят id записи, поэтому получателей резолвим
-// через db.data_records.get. Сервис отправки задаётся в самом канале («Сервис
-// уведомлений»): каналы группируются по сервису, на каждый уходит свой запрос.
+// (runActionCode). Получатели — строки ТЧ «Получатели» документа: Контрагент +
+// (необязательно) Канал. Адрес получателя берётся из ТЧ «Контакты» контрагента:
+// если в строке задан канал — шлём только в него, если пусто — во все контакты.
+// Сервис отправки задаётся в самом канале («Сервис уведомлений»): каналы
+// группируются по сервису, на каждый уходит свой запрос.
 export const NOTIFY_RUN_CODE = `
 // Отправка уведомления через сервис API (apiCall из контекста действия)
 const findTableId = async (name) => {
@@ -33,51 +42,51 @@ const findTableId = async (name) => {
 
 const servicesTable = await findTableId('api_services');
 const channelsTable = await findTableId('notify_channels');
-const recipientsTable = await findTableId('notify_recipients');
-const messageChannelsId = await findTableId('notify_message_channels');
-const chanLines = (lines || []).filter((l) => l.table_id === messageChannelsId);
+const contactsTable = await findTableId('contragent_contacts');
+const recipientsTabId = await findTableId('notify_message_channels');
+const recLines = (lines || []).filter((l) => l.table_id === recipientsTabId);
 
 // 1. Сервис отправки: из поля «Сервис уведомлений» канала (ссылка на api_services).
 // Если у канала не задан — первый активный сервис каталога.
 const services = await db.data_records.where('table_id').equals(servicesTable).toArray();
 const fallbackService = services.find((s) => s.data.is_active !== false) || services[0];
 
-// 2. Каналы и получатели из табличной части; группируем по сервису отправки.
+// 2. Контакты контрагентов из ТЧ «Получатели»; группируем по сервису отправки.
 const byService = {};
 const skipped = [];
-for (const line of chanLines) {
-	const chan = line.data.channel ? await db.data_records.get(line.data.channel) : null;
-	if (!chan || !chan.data.code) {
-		skipped.push(String(line.data.channel || '?'));
+for (const line of recLines) {
+	const kontragent = line.data.kontragent
+		? await db.data_records.get(line.data.kontragent)
+		: null;
+	if (!kontragent) {
+		skipped.push(String(line.data.kontragent || '?'));
 		continue;
 	}
-	let id = '';
-	if (line.data.recipient) {
-		const rec = await db.data_records.get(line.data.recipient);
-		if (!rec) {
+	const contacts = (await db.data_lines.where('record_id').equals(kontragent.id).toArray()).filter(
+		(l) => l.table_id === contactsTable
+	);
+	// Канал из строки — опционально: задан — только он, пусто — все контакты контрагента
+	const selected = line.data.channel
+		? contacts.filter((c) => c.data.channel === line.data.channel)
+		: contacts;
+	for (const contact of selected) {
+		const chan = contact.data.channel ? await db.data_records.get(contact.data.channel) : null;
+		if (!chan || !chan.data.code || !contact.data.value) {
+			skipped.push(chan?.data?.code || String(contact.data.channel || '?'));
+			continue;
+		}
+		const svc = chan.data.service ? await db.data_records.get(chan.data.service) : null;
+		const effective = svc || fallbackService;
+		if (!effective) {
 			skipped.push(chan.data.code);
 			continue;
 		}
-		id =
-			chan.data.code === 'email'
-				? rec.data.email
-				: chan.data.code === 'vk'
-					? rec.data.vk_id
-					: rec.data.tg_id;
-	} else {
-		id = chan.data.default_recipient || '';
+		if (!byService[effective.id]) byService[effective.id] = { service: effective, channels: [] };
+		byService[effective.id].channels.push({ type: chan.data.code, id: String(contact.data.value) });
 	}
-	const svc = chan.data.service ? await db.data_records.get(chan.data.service) : null;
-	const effective = svc || fallbackService;
-	if (!effective) {
-		skipped.push(chan.data.code);
-		continue;
-	}
-	if (!byService[effective.id]) byService[effective.id] = { service: effective, channels: [] };
-	byService[effective.id].channels.push({ type: chan.data.code, ...(id ? { id } : {}) });
 }
 const groups = Object.values(byService);
-if (groups.length === 0) throw new Error('Нет каналов с получателями для отправки');
+if (groups.length === 0) throw new Error('Нет получателей с заполненными контактами');
 
 // 3. Тело запроса (без channels — они добавляются по каждой группе)
 const body = {
@@ -191,14 +200,22 @@ function channelColumns(servicesId: string): ColumnSeed[] {
 	];
 }
 
-const RECIPIENT_COLUMNS: ColumnSeed[] = [
-	{ name: 'number', title: 'Код', type: 'string', sort_order: 1, is_visible: true },
-	{ name: 'name', title: 'Наименование', type: 'string', sort_order: 2, is_visible: true },
-	{ name: 'tg_id', title: 'Telegram chat id', type: 'string', sort_order: 3, is_visible: false },
-	{ name: 'vk_id', title: 'VK user id', type: 'string', sort_order: 4, is_visible: false },
-	{ name: 'email', title: 'E-mail', type: 'string', sort_order: 5, is_visible: false },
-	{ name: 'is_active', title: 'Активен', type: 'boolean', sort_order: 6, is_visible: false }
-];
+// Колонки ТЧ «Контакты» контрагента. Каждая строка — один канал отправки
+// (ссылка на «Каналы отправки») и его значение (tg chat id / vk id / e-mail).
+function contactColumns(channelsId: string): ColumnSeed[] {
+	return [
+		{
+			name: 'channel',
+			title: 'Канал',
+			type: 'link',
+			sort_order: 1,
+			is_visible: true,
+			related_table_id: channelsId
+		},
+		{ name: 'value', title: 'Значение', type: 'string', sort_order: 2, is_visible: true },
+		{ name: 'comment', title: 'Комментарий', type: 'string', sort_order: 3, is_visible: true }
+	];
+}
 
 function messageColumns(): ColumnSeed[] {
 	return [
@@ -224,23 +241,25 @@ function messageColumns(): ColumnSeed[] {
 	];
 }
 
-function messageChannelColumns(channelsId: string, recipientsId: string): ColumnSeed[] {
+// Колонки ТЧ «Получатели» документа «Сообщение»: Контрагент + (необязательно)
+// Канал. Канал пуст — уходят все контакты контрагента; задан — только он.
+function messageRecipientColumns(counterpartiesId: string, channelsId: string): ColumnSeed[] {
 	return [
+		{
+			name: 'kontragent',
+			title: 'Контрагент',
+			type: 'link',
+			sort_order: 1,
+			is_visible: true,
+			related_table_id: counterpartiesId
+		},
 		{
 			name: 'channel',
 			title: 'Канал',
 			type: 'link',
-			sort_order: 1,
-			is_visible: true,
-			related_table_id: channelsId
-		},
-		{
-			name: 'recipient',
-			title: 'Получатель',
-			type: 'link',
 			sort_order: 2,
 			is_visible: true,
-			related_table_id: recipientsId
+			related_table_id: channelsId
 		}
 	];
 }
@@ -282,6 +301,25 @@ async function ensureTable(
 			if (!error && data) tableId = data.id;
 		} catch {
 			tableId = null;
+		}
+	}
+
+	// Серверные дубликаты имени: переносим их колонки и данные в каноническую
+	// таблицу и удаляем, иначе pullMetadata (он очищает локальный кэш и тянет всё
+	// с сервера) будет возвращать дубликат в кэш, и у записи появится лишняя
+	// пустая табличная часть.
+	if (tableId && online) {
+		try {
+			const { data: allRows } = await supabase.from('meta_tables').select('id').eq('name', name);
+			const dups = (allRows ?? []).filter((t) => t.id !== tableId);
+			for (const dup of dups) {
+				await supabase.from('meta_columns').update({ table_id: tableId }).eq('table_id', dup.id);
+				await supabase.from('data_records').update({ table_id: tableId }).eq('table_id', dup.id);
+				await supabase.from('data_lines').update({ table_id: tableId }).eq('table_id', dup.id);
+				await supabase.from('meta_tables').delete().eq('id', dup.id);
+			}
+		} catch {
+			// сервер недоступен — дубликат уберётся при следующем цикле
 		}
 	}
 
@@ -376,6 +414,27 @@ async function hasServerRows(tableId: string, online: boolean): Promise<boolean>
 	} catch {
 		return false; // сервер недоступен — сидим локально, уедет при ближайшем синке
 	}
+}
+
+// id таблицы по name (сначала сервер, потом локальный кэш). Для «Контрагентов»:
+// таблица существует на сервере, но в пустом локальном кэше её ещё может не быть.
+async function findTableIdByName(name: string): Promise<string | null> {
+	const online = typeof navigator === 'undefined' || navigator.onLine;
+	if (online) {
+		try {
+			const { data } = await supabase
+				.from('meta_tables')
+				.select('id')
+				.eq('name', name)
+				.order('id', { ascending: true })
+				.limit(1);
+			if (data?.[0]?.id) return data[0].id;
+		} catch {
+			// сервер недоступен
+		}
+	}
+	const local = await db.meta_tables.where('name').equals(name).first();
+	return local?.id ?? null;
 }
 
 // Маппинг данных старой записи notify_providers → api_services.
@@ -484,6 +543,61 @@ async function migrateLegacyNotifyProviders(online: boolean): Promise<void> {
 	}
 
 	console.log('Каталог notify_providers переименован в api_services.');
+}
+
+// ТЧ «Контакты» у контрагентов: создаёт таблицу (parent = контрагенты) и
+// колонки. Идемпотентно; повторные вызовы только добивают недостающее.
+async function reconcileContacts(
+	counterpartiesId: string,
+	channelsId: string,
+	online: boolean
+): Promise<string> {
+	const contactsId = await ensureTable(CONTACT_TABLE, 'Контакты', 'tabular', {}, counterpartiesId);
+	await ensureColumns(contactsId, contactColumns(channelsId), online);
+	return contactsId;
+}
+
+// ТЧ «Получатели» документа «Сообщение»: переименовывает таблицу, приводит
+// колонки к [Контрагент, Канал] и удаляет legacy-колонку «Получатель».
+async function reconcileMessageTabular(
+	tabularId: string,
+	counterpartiesId: string | null,
+	channelsId: string,
+	online: boolean
+): Promise<void> {
+	if (online) {
+		try {
+			await supabase.from('meta_tables').update({ title: 'Получатели' }).eq('id', tabularId);
+		} catch {
+			// повторится при следующем цикле
+		}
+	}
+
+	// Новые колонки (konтрагент + канал) создаются, только когда известен id контрагентов
+	if (counterpartiesId) {
+		await ensureColumns(tabularId, messageRecipientColumns(counterpartiesId, channelsId), online);
+	}
+
+	// Legacy-колонка «Получатель» (notify_recipients) больше не нужна
+	if (online) {
+		try {
+			const { data: legacyCol } = await supabase
+				.from('meta_columns')
+				.select('id')
+				.eq('table_id', tabularId)
+				.eq('name', 'recipient')
+				.limit(1);
+			if (legacyCol?.[0]?.id) {
+				await supabase.from('meta_columns').delete().eq('id', legacyCol[0].id);
+			}
+		} catch {
+			// сервер недоступен
+		}
+	}
+	const localLegacy = await db.meta_columns.where('table_id').equals(tabularId).toArray();
+	for (const col of localLegacy) {
+		if (col.name === 'recipient') await db.meta_columns.delete(col.id);
+	}
 }
 
 // Данные по умолчанию: три стандартных канала и каталог сервисов astro3d.ru/api
@@ -658,15 +772,18 @@ async function seedDefaults(
 
 // Маркеры устаревших seed-версий runCode, которые стоит заменить актуальной:
 // битая версия (await внутри не-async filter), версия с прямым fetch к endpoint,
-// первая прокси-версия без ключа авторизации шлюза, версия на notify_providers
-// и версия, где сервис брался из поля «Провайдер» документа «Сообщение».
+// первая прокси-версия без ключа авторизации шлюза, версия на notify_providers,
+// версия, где сервис брался из поля «Провайдер» документа «Сообщение», и версия
+// на отдельный справочник получателей notify_recipients (line.data.recipient).
 const RUN_CODE_LEGACY = [
 	"await findTableId('notify_message_channels')",
 	"effective.data.endpoint + '?notify_key='",
 	'JSON.stringify({\n\t\turl: effective.data.endpoint,',
 	"findTableId('notify_providers')",
 	'record.data.provider',
-	'const effective = service || services.find('
+	'const effective = service || services.find(',
+	'line.data.recipient',
+	"findTableId('notify_recipients')"
 ];
 
 // Точечное лечение runCode документа «Сообщение» на сервере: ensureTable
@@ -708,14 +825,13 @@ export async function ensureNotificationTables(): Promise<void> {
 	const servicesId = await ensureTable(API_SERVICES_TABLE, 'Сервисы API', 'directory', {});
 	await migrateLegacyNotifyProviders(online);
 	const channelsId = await ensureTable(NOTIFY_CHANNELS_TABLE, 'Каналы отправки', 'directory', {});
-	const recipientsId = await ensureTable(NOTIFY_RECIPIENTS_TABLE, 'Получатели', 'directory', {});
 	const messagesId = await ensureTable(NOTIFY_MESSAGES_TABLE, 'Сообщение', 'document', {
 		features: { run: true },
 		runCode: NOTIFY_RUN_CODE
 	});
 	const messageChannelsId = await ensureTable(
 		NOTIFY_MESSAGE_CHANNELS_TABLE,
-		'Каналы и получатели',
+		'Получатели',
 		'tabular',
 		{},
 		messagesId
@@ -723,9 +839,18 @@ export async function ensureNotificationTables(): Promise<void> {
 
 	await ensureColumns(servicesId, serviceColumns(servicesId), online);
 	await ensureColumns(channelsId, channelColumns(servicesId), online);
-	await ensureColumns(recipientsId, RECIPIENT_COLUMNS, online);
 	await ensureColumns(messagesId, messageColumns(), online);
-	await ensureColumns(messageChannelsId, messageChannelColumns(channelsId, recipientsId), online);
+
+	// Контрагенты существуют на сервере; в пустом локальном кэше их ещё может не быть.
+	const counterpartiesId = await findTableIdByName('counterparties');
+
+	// ТЧ «Контакты» у контрагентов (подчинённая таблица: канал + значение)
+	if (counterpartiesId) {
+		await reconcileContacts(counterpartiesId, channelsId, online);
+	}
+
+	// ТЧ «Получатели» сообщения: [Контрагент, Канал], legacy-колонка удаляется
+	await reconcileMessageTabular(messageChannelsId, counterpartiesId, channelsId, online);
 
 	// Лечение ранней (битой) версии seed-кода: в ней await был внутри не-async
 	// стрелочной функции filter(...) — такой код не проходит парсинг. ensureTable

@@ -3,7 +3,7 @@
 	import { workspace } from '$lib/state/workspace.svelte';
 	import { numberService } from '$lib/services/numbers';
 	import { printerService } from '$lib/services/printer';
-	import { getTableType, getEffectiveConfig } from '$lib/table-types';
+	import { getTableType, getEffectiveConfig, findParentColumn } from '$lib/table-types';
 	import { formatFieldValue } from '$lib/fields';
 	import { physicalDeleteRecords } from '$lib/services/records';
 	import { apiCall, runActionCode, saveRecordWithLines } from '$lib/services/actionRunner';
@@ -28,12 +28,19 @@
 
 	let currentFolderId = $state<string | null>(null);
 
+	// Режим показа иерархического списка: 'groups' — по группам (как сейчас),
+	// 'all' — развёрнутый список всех записей справочника.
+	let viewMode = $state<'groups' | 'all'>('groups');
+
 	let sortField = $state<string>('number');
 	let sortDirection = $state<'asc' | 'desc'>('asc');
 
 	let tableType = $derived(tableMeta?.type ?? 'document');
 	let tableTypeDef = $derived(getTableType(tableType));
 	let isHierarchical = $derived(getEffectiveConfig(tableMeta).features.hierarchy);
+
+	// Колонка «Родитель» (ссылка на саму таблицу): задаёт группу в форме иерархического справочника
+	let parentColumnName = $derived(findParentColumn(allColumns, tableId)?.name ?? null);
 
 	// Системные таблицы (например, история действий) по умолчанию сортируем
 	// по дате открытия от новых к старым, а не по колонке "number".
@@ -106,14 +113,21 @@
 		};
 	});
 
+	// ID всех папок: записи, родитель которых не папка (осиротевшие/недоступные),
+	// показываем в корне, чтобы они никогда не пропадали из списка.
+	let folderIds = $derived(new Set(records.filter((r) => r.is_folder).map((r) => r.id)));
+
 	let filteredAndSortedRecords = $derived.by(() => {
-		const currentLevelRecords = records.filter((r) =>
-			isHierarchical
-				? currentFolderId === null
-					? r.parent_id == null
-					: r.parent_id === currentFolderId
-				: true
-		);
+		const currentLevelRecords = records.filter((r) => {
+			if (!isHierarchical || viewMode === 'all') return true;
+			// Родитель хранится в parent_id (папки) и/или в колонке-ссылке «Родитель» (форма).
+			const parentValue = parentColumnName ? r.data?.[parentColumnName] || null : null;
+			const parentId = r.parent_id ?? parentValue;
+			if (currentFolderId === null) {
+				return parentId == null || !folderIds.has(parentId);
+			}
+			return parentId === currentFolderId;
+		});
 
 		return currentLevelRecords.sort((a, b) => {
 			if (isHierarchical) {
@@ -218,17 +232,31 @@
 		const folderName = prompt('Введите наименование новой группы (папки):');
 		if (!folderName) return;
 
+		const folderData: Record<string, any> = { name: folderName, number: 'ПАПКА' };
+		if (parentColumnName && currentFolderId) folderData[parentColumnName] = currentFolderId;
+
 		await db.data_records.put({
 			id: crypto.randomUUID(),
 			table_id: tableId,
 			status: 'draft',
 			is_folder: true,
 			parent_id: currentFolderId,
-			data: { name: folderName, number: 'ПАПКА' },
+			data: folderData,
 			is_dirty: 1,
 			updated_at: new Date().toISOString()
 		});
 		selectedIds = [];
+	}
+
+	// Переименование группы (папки): у папок нет формы, имя меняем прямо в списке.
+	async function handleRenameFolder(record: LocalRecord) {
+		const currentName = record.data?.name ?? '';
+		const folderName = prompt('Новое наименование группы (папки):', currentName);
+		if (folderName === null || folderName.trim() === '') return;
+		await db.data_records.update(record.id, {
+			data: { ...record.data, name: folderName.trim() },
+			is_dirty: 1
+		});
 	}
 
 	async function handleMoveUp() {
@@ -252,11 +280,12 @@
 				: 'СП-';
 		const nextFreeNumber = await numberService.getNextNumber(tableId, prefix);
 
-		const newRecordData = {
+		const newRecordData: Record<string, any> = {
 			...sourceRecord.data,
 			number: nextFreeNumber,
 			date: new Date().toISOString().split('T')[0]
 		};
+		if (parentColumnName) newRecordData[parentColumnName] = currentFolderId ?? '';
 
 		await db.transaction('rw', [db.data_records, db.data_lines], async () => {
 			await db.data_records.put({
@@ -443,6 +472,8 @@
 		}
 
 		if (record.is_folder && isHierarchical) {
+			// В развёрнутом списке клик по папке переключает в режим «По группам» и открывает её
+			if (viewMode === 'all') viewMode = 'groups';
 			currentFolderId = record.id;
 			selectedIds = [];
 		} else {
@@ -504,21 +535,41 @@
 
 	{#if isHierarchical}
 		<div class="hierarchy-breadcrumbs">
-			<button
-				onclick={() => {
-					currentFolderId = null;
-					selectedIds = [];
-				}}
-				class="btn-crumb">📁 Корень каталога</button
-			>
-			{#if currentFolderId}
-				<button onclick={handleMoveUp} class="btn-move-up">⬆️ На уровень вверх</button>
-				<button onclick={handleCreateFolder} class="btn-add-folder">📁 Создать подгруппу</button>
-			{:else}
-				<button onclick={handleCreateFolder} class="btn-add-folder"
-					>📁 Создать группу (папку)</button
+			{#if viewMode === 'groups'}
+				<button
+					onclick={() => {
+						currentFolderId = null;
+						selectedIds = [];
+					}}
+					class="btn-crumb">📁 Корень каталога</button
 				>
+				{#if currentFolderId}
+					<button onclick={handleMoveUp} class="btn-move-up">⬆️ На уровень вверх</button>
+					<button onclick={handleCreateFolder} class="btn-add-folder">📁 Создать подгруппу</button>
+				{:else}
+					<button onclick={handleCreateFolder} class="btn-add-folder"
+						>📁 Создать группу (папку)</button
+					>
+				{/if}
 			{/if}
+			<div class="hierarchy-view-toggle">
+				<button
+					class="view-toggle-btn"
+					class:active={viewMode === 'groups'}
+					onclick={() => {
+						viewMode = 'groups';
+					}}>По группам</button
+				>
+				<button
+					class="view-toggle-btn"
+					class:active={viewMode === 'all'}
+					onclick={() => {
+						viewMode = 'all';
+						currentFolderId = null;
+						selectedIds = [];
+					}}>Все</button
+				>
+			</div>
 		</div>
 	{/if}
 
@@ -639,6 +690,19 @@
 												>
 													Открыть
 												</button>
+												{#if record.is_folder}
+													<button
+														type="button"
+														class="row-menu-item"
+														onclick={(e) => {
+															e.stopPropagation();
+															openMenuId = null;
+															handleRenameFolder(record);
+														}}
+													>
+														✏️ Переименовать группу
+													</button>
+												{/if}
 												{#if !record.is_folder && tableType !== 'system'}
 													<button
 														type="button"
@@ -749,6 +813,29 @@
 	.btn-move-up:hover,
 	.btn-add-folder:hover {
 		background: #f1f5f9;
+	}
+	.hierarchy-view-toggle {
+		margin-left: auto;
+		display: flex;
+		gap: 4px;
+	}
+	.view-toggle-btn {
+		background: #ffffff;
+		border: 1px solid #cbd5e1;
+		font-size: 0.8rem;
+		padding: 3px 10px;
+		border-radius: 4px;
+		cursor: pointer;
+		color: #475569;
+	}
+	.view-toggle-btn:hover {
+		background: #f1f5f9;
+	}
+	.view-toggle-btn.active {
+		background: #2563eb;
+		border-color: #2563eb;
+		color: #ffffff;
+		font-weight: 600;
 	}
 	.table-wrapper {
 		flex: 1;

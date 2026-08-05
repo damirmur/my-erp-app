@@ -188,7 +188,7 @@ The Sidebar «🕘 История» button (main mode) opens the table as a `Dyn
 
 ## Notifications module & «Сервисы API»
 
-Seeded idempotently by `ensureNotificationTables()` (called from `metadata.ensureSystemTables()` — startup + start of each sync). `src/lib/state/notifications.ts` defines table/column seeds, one-time migration `migrateLegacyNotifyProviders` (`notify_providers` → `api_services`), and the «Выполнить» code of the «Сообщение» document.
+Seeded idempotently by `ensureNotificationTables()` (called from `metadata.ensureSystemTables()` — startup + start of each sync). `src/lib/state/notifications.ts` defines table/column seeds, one-time migrations (`migrateLegacyNotifyProviders`: `notify_providers` → `api_services`; legacy «Получатели» → ТЧ «Контакты» контрагентов: `contragent_contacts` created, message ТЧ switched to `kontragent`+`channel`, `recipient` column dropped, `notify_recipients` removed entirely), and the «Выполнить» code of the «Сообщение» document.
 
 ### Tables (all created via the same seed pattern as «История»)
 
@@ -196,9 +196,9 @@ Seeded idempotently by `ensureNotificationTables()` (called from `metadata.ensur
 | -------------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `api_services`             | directory | Каталог внешних endpoints. Колонки: `number, name, base_url, method, auth_type, auth_param, api_key, headers, proxy` (link → api_services), `is_active, description` |
 | `notify_channels`          | directory | Канал отправки: `code` (`tg`/`vk`/`email`), `default_recipient`, `service` (link → api_services), `is_active`                                                        |
-| `notify_recipients`        | directory | Контакт: `tg_id`, `vk_id`, `email`, `is_active`                                                                                                                      |
 | `notify_messages`          | document  | «Сообщение»: `subject, message, file, last_result, last_response`                                                                                                    |
-| `notify_message_channels`  | tabular   | ТЧ «Сообщения»: `channel` (link → notify_channels), `recipient` (link → notify_recipients)                                                                           |
+| `notify_message_channels`  | tabular   | ТЧ «Получатели» «Сообщения»: `kontragent` (link → counterparties), `channel` (link → notify_channels, опционально)                                                   |
+| `contragent_contacts`      | tabular   | ТЧ «Контакты» контрагента (parent → counterparties): `channel` (link → notify_channels), `value` (tg chat id / vk id / email), `comment`                             |
 
 ### Proxy gateway & `apiCall`
 
@@ -212,7 +212,7 @@ Seeded idempotently by `ensureNotificationTables()` (called from `metadata.ensur
 
 ### «Сообщение» dispatch (`NOTIFY_RUN_CODE`)
 
-The document's action groups ТЧ rows by their channel's `service` field (fallback: first active service) and sends **one request per service** with `{ message, file?, channels: [{ type, id }] }`. Results collected into `last_response` (array of `{ service, ok, status, response }`), `last_result` = `ok`/`fail`. The run code must be kept **byte-identical** with the server-side copy (markers tracked via `RUN_CODE_LEGACY`, len 3149).
+ТЧ «Получатели» содержит контрагента и (необязательно) канал. Действие для каждой строки читает ТЧ «Контакты» контрагента (`data_lines`, `record_id` = контрагент), берёт значение по каналу (канал не задан — все контакты), группирует строки по `service` канала (fallback: первый активный сервис) и шлёт **один запрос на сервис** с `{ message, file?, channels: [{ type, id }] }`. Результаты — в `last_response` (массив `{ service, ok, status, response }`), `last_result` = `ok`/`fail`. Run-код должен оставаться **побайтово идентичным** серверной копии (маркеры в `RUN_CODE_LEGACY`).
 
 ---
 

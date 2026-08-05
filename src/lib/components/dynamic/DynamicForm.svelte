@@ -6,7 +6,7 @@
 	import { physicalDeleteRecords } from '$lib/services/records';
 	import { apiCall, runActionCode, saveRecordWithLines } from '$lib/services/actionRunner';
 	import { supabase } from '$lib/db/supabase';
-	import { isReadOnly } from '$lib/table-types';
+	import { isReadOnly, findParentColumn } from '$lib/table-types';
 	import { fieldRegistry } from '$lib/fields';
 	import { isValidBirthLocal, defaultBirth } from '$lib/fields/birth';
 	import { buildRecordUrl, fullUrlFor, linkApi } from '$lib/services/deeplink';
@@ -251,13 +251,18 @@
 		}
 
 		try {
+			// Родитель в форме задаётся колонкой-ссылкой на саму таблицу («Родитель»);
+			// синхронизируем его в отдельное поле parent_id, по которому строится иерархия.
+			const parentColumn = findParentColumn(columns, tableId);
+			const parentId = parentColumn ? cleanData[parentColumn.name] || null : null;
+
 			await db.transaction('rw', [db.data_records, db.data_lines], async () => {
 				await db.data_records.put({
 					id: recordId,
 					table_id: tableId,
 					status: targetStatus as any,
 					is_folder: false,
-					parent_id: null,
+					parent_id: parentId,
 					data: { ...cleanData, total_amount: totalAmount },
 					is_dirty: 1,
 					updated_at: new Date().toISOString()

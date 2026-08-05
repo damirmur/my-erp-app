@@ -1,1 +1,0 @@
-curl -k -X POST -H "Content-Type: application/json" -d '{"message":"🚀 Проверка сквозного пути: OpenCode -> Go -> Telegram!"}' https://10.66.66.1/api/opencode-notify

@@ -34,6 +34,7 @@ my-erp-app/
 │       │   └── numbers.ts          # Auto-numbering (prefix + padded digits)
 │       ├── state/
 │       │   ├── metadata.ts         # CRUD meta_tables/meta_columns via Supabase (+ setColumnVisibility)
+│       │   ├── notifications.ts    # Seed + migration: «Сервисы API», каналы, получатели, «Сообщение» (NOTIFY_RUN_CODE)
 │       │   └── workspace.svelte.ts # Tab manager (Svelte 5 runes)
 │       ├── table-types/
 │       │   ├── type.ts             # StatusDef, ActionDef, TableTypeModule, features interfaces
@@ -185,6 +186,36 @@ The Sidebar «🕘 История» button (main mode) opens the table as a `Dyn
 
 ---
 
+## Notifications module & «Сервисы API»
+
+Seeded idempotently by `ensureNotificationTables()` (called from `metadata.ensureSystemTables()` — startup + start of each sync). `src/lib/state/notifications.ts` defines table/column seeds, one-time migration `migrateLegacyNotifyProviders` (`notify_providers` → `api_services`), and the «Выполнить» code of the «Сообщение» document.
+
+### Tables (all created via the same seed pattern as «История»)
+
+| Table (`meta_tables.name`) | Type      | Purpose                                                                                                                                                              |
+| -------------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `api_services`             | directory | Каталог внешних endpoints. Колонки: `number, name, base_url, method, auth_type, auth_param, api_key, headers, proxy` (link → api_services), `is_active, description` |
+| `notify_channels`          | directory | Канал отправки: `code` (`tg`/`vk`/`email`), `default_recipient`, `service` (link → api_services), `is_active`                                                        |
+| `notify_recipients`        | directory | Контакт: `tg_id`, `vk_id`, `email`, `is_active`                                                                                                                      |
+| `notify_messages`          | document  | «Сообщение»: `subject, message, file, last_result, last_response`                                                                                                    |
+| `notify_message_channels`  | tabular   | ТЧ «Сообщения»: `channel` (link → notify_channels), `recipient` (link → notify_recipients)                                                                           |
+
+### Proxy gateway & `apiCall`
+
+`apiCall(service, params?, body?)` (`src/lib/services/actionRunner.ts`) is exposed to `runCode`:
+
+1. Loads the service record by id (or accepts the record itself).
+2. Substitutes `${param}` tokens in `base_url` with URL-encoded values from `params`.
+3. Applies auth: `auth_type=query` → `auth_param=api_key` in query string; `auth_type=header` → in header.
+4. **Proxy routing**: if the service has the `proxy` link filled → the request goes to the **proxy service's** `base_url` (the gateway endpoint, e.g. `astro3d.ru/api/proxy`) with the **proxy service's** `api_key` as `notify_key`, wrapping `{ url, method, query, headers, body }`. Empty `proxy` → direct `fetch` from the browser (CORS permitting). Backwards compat: `use_proxy === true` → default `https://astro3d.ru/api/proxy`.
+5. Returns `{ ok, status, data, raw }` (JSON parsed, fallback to raw text).
+
+### «Сообщение» dispatch (`NOTIFY_RUN_CODE`)
+
+The document's action groups ТЧ rows by their channel's `service` field (fallback: first active service) and sends **one request per service** with `{ message, file?, channels: [{ type, id }] }`. Results collected into `last_response` (array of `{ service, ok, status, response }`), `last_result` = `ok`/`fail`. The run code must be kept **byte-identical** with the server-side copy (markers tracked via `RUN_CODE_LEGACY`, len 3149).
+
+---
+
 ## Table Types System (Plugin Architecture)
 
 Each table type defines its own:
@@ -221,7 +252,8 @@ Each table type defines its own:
   `new Function(...paramNames, 'return (async () => {...})()')` — code is an async body
 - Variables available to user code without prefix: `record` (LocalRecord), `records` (selected), `lines` (ТЧ rows),
   `db` (Dexie), `supabase`, `save(record, lines?)` (marks `is_dirty: 1`), `log(...args)` (console),
-  `link` (deep-link helpers — `link.get(href)` returns values, `link.record/line/table(id)` generate links)
+  `link` (deep-link helpers — `link.get(href)` returns values, `link.record/line/table(id)` generate links),
+  `apiCall(service, params?, body?)` (call an external API via the «Сервисы API» catalog — see Notifications section)
 - Example: `record.data.total_amount = 42; await save(record);`
 - After form execution DynamicForm re-reads the record and refreshes `recordData`
 
@@ -344,7 +376,8 @@ Runtime `ActionDef` uses function predicates: `show?: (status) => boolean`. DB s
 - **Metadata deletion is cascaded** (`metadata.ts`): `deleteTableCascade` removes `data_records` + `data_lines` (server via `.in('table_id')`, local via `.anyOf`) before deleting `meta_tables`.
 - **Service Worker is network-first** (`service-worker.ts`): fetch fresh from server, cache successful responses, fall back to cache only when offline. Do NOT switch back to cache-first — Vite dev module URLs are un-hashed, so cache-first serves stale code and breaks hot changes (CDP/browser tests must still clear `caches` + unregister the SW once to drop an old cache).
 - **Hard refresh (🔄 in Workspace)**: runs `runFullSync()` → clears all 5 Dexie tables → deletes all Cache Storage entries → `location.replace` with a `?hard=<timestamp>` query (busts SW/navigation cache). Used to reset a stale offline cache.
-- **Supabase schema migrations** live in `supabase/migrations/` (`0001_cloud_init.sql` is a full dump; `0002_add_file_zip_column_types.sql` adds `file`/`zip` to the `column_type` enum — applied with `supabase db push`). New enum values for new field types need a new migration.
+- **Supabase schema migrations** live in `supabase/migrations/` (`0001_cloud_init.sql` is a full dump; `0002_add_file_zip_column_types.sql` adds `file`/`zip` to the `column_type` enum; `0003_add_datetime_birth_column_types.sql` adds `datetime`/`birth`). The folder is gitignored — applied manually with `supabase db push` from `supabase/`.
+- **Locale-aware dates**: `formatFieldValue` and the `opened_at` special case in `DynamicList` format `date`/`datetime` via `Intl.DateTimeFormat` with the browser's locale (`dateStyle: 'short'`, `timeStyle: 'short'`).
 - **Supabase anon key** in `.env` (gitignored), imported via `$env/static/public`.
 - **`npm run check`** for type-checking (run `svelte-kit sync` first). No test suite.
 - **Adapter-auto**: no production platform detected — build warning is expected.

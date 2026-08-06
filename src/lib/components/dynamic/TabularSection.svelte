@@ -86,9 +86,15 @@
 	});
 
 	function addLine() {
+		const data = defaultLineData();
+		// Первая строка ТЧ с булевой колонкой «default» помечается как основная
+		// (например, контакт по умолчанию у контрагента).
+		if (lines.length === 0 && columns.some((c) => c.name === 'default' && c.type === 'boolean')) {
+			data.default = true;
+		}
 		lines.push({
 			id: crypto.randomUUID(),
-			data: defaultLineData(),
+			data,
 			sort_order: lines.length
 		});
 		if (onChange) onChange();

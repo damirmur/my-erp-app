@@ -213,7 +213,14 @@ function contactColumns(channelsId: string): ColumnSeed[] {
 			related_table_id: channelsId
 		},
 		{ name: 'value', title: 'Значение', type: 'string', sort_order: 2, is_visible: true },
-		{ name: 'comment', title: 'Комментарий', type: 'string', sort_order: 3, is_visible: true }
+		{ name: 'comment', title: 'Комментарий', type: 'string', sort_order: 3, is_visible: true },
+		{
+			name: 'default',
+			title: 'По умолчанию',
+			type: 'boolean',
+			sort_order: 4,
+			is_visible: true
+		}
 	];
 }
 

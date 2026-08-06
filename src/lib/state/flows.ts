@@ -29,6 +29,100 @@ export const FLOW_ELEMENTS_TABLE = 'flow_elements';
 export const FLOW_RUN_CODE = `// Выполнение сценария: граф из ТЧ «Узлы» и «Связи»
 return await flow(record.id, params);`;
 
+// Код узла «Текст прогноза»: формирует человекочитаемый текст погоды из JSON
+// wttr.in (вход узла — результат узла «Погода»). Возвращает текст — он уходит
+// в контекст сценария и подставляется в сообщение через ${Текст прогноза}.
+export const FORECAST_TEXT_CODE = [
+	'// Текст прогноза из JSON погоды (вход узла «Погода»), вывод в часовом поясе браузера',
+	"const json = (input && typeof input === 'object' && !Array.isArray(input)) ? input : {};",
+	'',
+	'const cur = json.current_condition?.[0] ?? {};',
+	'const area = json.nearest_area?.[0] ?? {};',
+	"const city = area.areaName?.[0]?.value ?? '';",
+	"const region = area.region?.[0]?.value ?? '';",
+	'const today = json.weather?.[0] ?? {};',
+	'const astro = today.astronomy?.[0] ?? {};',
+	'',
+	'// Время в формате и часовом поясе браузера',
+	"const fmtNow = () => new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });",
+	'',
+	'// "05:45 AM" -> "05:45" (24-часовой формат, как принято в браузере)',
+	'const to24 = (t) => {',
+	"  if (!t) return '';",
+	'  const m = t.trim().toUpperCase().match(/^(\\d{1,2}):(\\d{2})\\s*(AM|PM)?$/);',
+	'  if (!m) return t;',
+	'  let h = +m[1];',
+	'  const p = m[3];',
+	"  if (p === 'PM' && h < 12) h += 12;",
+	"  if (p === 'AM' && h === 12) h = 0;",
+	"  return `${String(h).padStart(2, '0')}:${m[2]}`;",
+	'};',
+	'',
+	'// Начало суток для даты "YYYY-MM-DD" в часовом поясе браузера',
+	'const dayStart = (ds) => new Date(`${ds}T00:00:00`);',
+	'const todayStart = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; })();',
+	'const dayDiff = (ds) => Math.round((dayStart(ds) - todayStart) / 86400000);',
+	"const relDay = (n) => (n === 0 ? 'сегодня' : n === 1 ? 'завтра' : n === 2 ? 'послезавтра' : '');",
+	'',
+	'// Дата в формате браузера с днём недели и относительной подписью',
+	'const fmtDate = (ds) => {',
+	'  const d = dayStart(ds);',
+	'  const rel = relDay(dayDiff(ds));',
+	"  const base = `${d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })}, ${d.toLocaleDateString('ru-RU', { weekday: 'long' })}`;",
+	'  return rel ? `${base} (${rel})` : base;',
+	'};',
+	'',
+	'// Описание дня из почасовых данных (самое частое; при равенстве — значение на полдень)',
+	'const dayDesc = (d) => {',
+	'  const h = d.hourly ?? [];',
+	"  if (!h.length) return '';",
+	"  const vals = h.map((x) => x.lang_ru?.[0]?.value ?? x.weatherDesc?.[0]?.value ?? '').filter(Boolean);",
+	"  if (!vals.length) return '';",
+	'  const counts = {};',
+	'  for (const v of vals) counts[v] = (counts[v] ?? 0) + 1;',
+	'  const max = Math.max(...Object.values(counts));',
+	'  const ties = Object.keys(counts).filter((v) => counts[v] === max);',
+	'  if (ties.length === 1) return ties[0];',
+	"  const noon = h.find((x) => x.time === '1200') ?? h[Math.floor(h.length / 2)];",
+	'  return noon?.lang_ru?.[0]?.value ?? ties[0];',
+	'};',
+	'',
+	'const lines = [];',
+	"lines.push(`Погода в ${city}${region ? ', ' + region : ''} на ${fmtNow()}:`);",
+	"lines.push(`• ${cur.lang_ru?.[0]?.value ?? cur.weatherDesc?.[0]?.value ?? '—'}, ${cur.temp_C ?? '—'}°C, ощущается как ${cur.FeelsLikeC ?? '—'}°C`);",
+	"lines.push(`• Влажность: ${cur.humidity ?? '—'}%, осадки: ${cur.precipMM ?? '—'} мм`);",
+	"lines.push(`• Ветер: ${cur.windspeedKmph ?? '—'} км/ч (${cur.winddir16Point ?? '—'}), давление: ${cur.pressure ?? '—'} гПа`);",
+	"lines.push(`• УФ-индекс: ${cur.uvIndex ?? '—'}, облачность: ${cur.cloudcover ?? '—'}%, видимость: ${cur.visibility ?? '—'} км`);",
+	'',
+	'// Изменение погоды в течение дня (сегодня)',
+	'const todayHourly = today.hourly ?? [];',
+	'if (todayHourly.length) {',
+	"  lines.push('');",
+	"  lines.push('В течение дня:');",
+	'  for (const h of todayHourly) {',
+	'    const t = to24(`${Math.floor(+h.time / 100)}:00`);',
+	"    lines.push(`• ${t}: ${h.lang_ru?.[0]?.value ?? h.weatherDesc?.[0]?.value ?? '—'}, ${h.tempC ?? '—'}°C`);",
+	'  }',
+	'}',
+	'',
+	'if (json.weather?.length) {',
+	"  lines.push('');",
+	"  lines.push('Прогноз:');",
+	'  for (const d of json.weather) {',
+	"    const snow = parseFloat(d.totalSnow_cm) > 0 ? `, снег: ${d.totalSnow_cm} см` : '';",
+	'    const desc = dayDesc(d);',
+	"    lines.push(`• ${fmtDate(d.date)}: мин ${d.mintempC ?? '—'}°C, макс ${d.maxtempC ?? '—'}°C${desc ? `, ${desc}` : ''}, УФ ${d.uvIndex ?? '—'}${snow}`);",
+	'  }',
+	'}',
+	'',
+	'if (astro?.sunrise) {',
+	"  lines.push('');",
+	'  lines.push(`• Рассвет: ${to24(astro.sunrise)}, закат: ${to24(astro.sunset)}, фаза луны: ${astro.moon_phase} (${astro.moon_illumination}%)`);',
+	'}',
+	'',
+	"return lines.join('\\n');"
+].join('\n');
+
 function scenarioColumns(): Omit<LocalColumn, 'id' | 'table_id'>[] {
 	return [
 		{ name: 'number', title: 'Код', type: 'string', sort_order: 10, is_visible: true },
@@ -380,10 +474,18 @@ async function seedFlowElements(online: boolean, wttrId: string): Promise<Map<st
 		},
 		{
 			name: 'Текст прогноза',
-			element_type: 'template',
-			params: {
-				template:
-					'Погода в городе ${nearest_area.0.areaName.0.value}: ${current_condition.0.temp_C}°C, ${current_condition.0.weatherDesc.0.value}'
+			element_type: 'code',
+			code: FORECAST_TEXT_CODE,
+			params: {},
+			// Старый заводской конфиг (однострочный шаблон) — обновляем до кода,
+			// пока элемент не редактировали вручную.
+			legacy: {
+				element_type: 'template',
+				params: {
+					template:
+						'Погода в городе ${nearest_area.0.areaName.0.value}: ${current_condition.0.temp_C}°C, ${current_condition.0.weatherDesc.0.value}'
+				},
+				service: ''
 			}
 		},
 		{
@@ -391,9 +493,21 @@ async function seedFlowElements(online: boolean, wttrId: string): Promise<Map<st
 			element_type: 'find',
 			params: {
 				table: 'contragent_contacts',
-				where: { record_id: '${kontragents}' },
+				where: { record_id: '${kontragents}', default: true },
 				all: true,
 				map: { kontragent: 'record_id', channel: 'channel' }
+			},
+			// Старый заводской конфиг (все контакты без фильтра default) — обновляем,
+			// пока элемент не редактировали вручную.
+			legacy: {
+				element_type: 'find',
+				params: {
+					table: 'contragent_contacts',
+					where: { record_id: '${kontragents}' },
+					all: true,
+					map: { kontragent: 'record_id', channel: 'channel' }
+				},
+				service: ''
 			}
 		},
 		{
@@ -473,7 +587,8 @@ async function seedFlowElements(online: boolean, wttrId: string): Promise<Map<st
 			const target = {
 				element_type: def.element_type,
 				params: def.params ?? {},
-				service: def.service ?? ''
+				service: def.service ?? '',
+				code: def.code ?? ''
 			};
 			// Элемент всё ещё на старом заводском конфиге — поднимаем до нового дефолта.
 			if (def.legacy && deepEqual(keyConfig(existing.data), def.legacy)) {
@@ -515,7 +630,7 @@ async function seedFlowElements(online: boolean, wttrId: string): Promise<Map<st
 				element_type: def.element_type,
 				service: def.service ?? '',
 				params: def.params ?? {},
-				code: '',
+				code: def.code ?? '',
 				description: def.description ?? ''
 			},
 			is_dirty: 1,

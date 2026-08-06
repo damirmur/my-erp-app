@@ -28,7 +28,7 @@
 	let loading = $state(true);
 
 	// Типы полей, у которых метка всегда над полем (не помещаются в одну строку)
-	const wideFieldTypes = ['textarea', 'file', 'zip', 'universal'];
+	const wideFieldTypes = ['textarea', 'jsonb', 'file', 'zip', 'universal'];
 
 	let tableType = $derived(tableMeta?.type ?? 'document');
 	let tableConfig = $derived(tableMeta?.config ?? {});

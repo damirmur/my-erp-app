@@ -177,6 +177,24 @@ Result type is `ResolvedLink` (discriminated union: `list` | `record` | `line` �
 - `DynamicForm` toolbar row → «🔗 Копировать ссылку на запись»
 - `TabularSection` → «🔗 Копировать ссылку строки» (on the selected row)
 
+### API mode (JSON by link, no form opened)
+
+Any table/record exposes a «JSON command» that returns data — or executes the table's `runCode` — **without opening a form/list** (all client-side, works offline):
+
+| Link                                           | Result                                                 |
+| ---------------------------------------------- | ------------------------------------------------------ |
+| `#/t/{tableId}.json`                           | list as JSON (`{ kind, table, columns, records }`)     |
+| `#/r/{recordId}.json`                          | record + ТЧ lines as JSON (`record`, `lines`)          |
+| `#/r/{recordId}.execute.json`                  | run the table's `runCode` for the record, return value |
+| `#/r/{recordId}.execute({city:Orenburg}).json` | same, with input params                                |
+
+- `parseHash` detects the `.json` / `.execute({...}).json` suffixes on the `t`/`r` segment and returns the new `DeepLink` kinds `listJson`/`recordJson`/`execute`. Params literal (`{city:Orenburg}` — unquoted keys/strings, or strict JSON) is parsed **without eval** by `parseParamsLiteral` (small recursive-descent parser in `deeplink.ts`).
+- Execution lives in `src/lib/services/apiCommand.ts` (`runApiCommand(link)`): for `execute` it calls `runRecordAction` (`actionRunner.ts` — loads record/table/lines, merges defaults via `mergeParams`, passes `params` into the context, never throws). If the table has no `runCode`, it falls back to a **declarative** call: if the record has a `service` link (catalog «API-запросы») → `apiCall(serviceRecord, params)`; if it **is an API service** (has `base_url`) → `apiCall(record, params)`. So any «API-запрос» or «Сервисы API» row works as an endpoint: `#/r/{id}.execute({...}).json`. For `json` kinds it reuses `resolveLink` and serializes to a clean JSON object. Result → `workspace.apiResult`.
+- **API-queries catalog** (`src/lib/state/apiQueries.ts`): system document `api_queries` seeded idempotently via `ensureApiQueryTables()` (from `metadata.ensureSystemTables()`, after notifications) + `seedApiQueryDefaults()` (in `sync.runFullSync`, after `seedNotificationDefaults()`). Each record = `service` link → api_services + `params` jsonb defaults + optional runCode. `mergeParams(record, linkParams)` = `{ ...record.data.params, ...linkParams }` (link wins by key) and is applied in `runRecordAction` and `runAnotherTable`; `DynamicForm`/`DynamicList` `handleRun` now delegate to `runRecordAction` (result → API panel), so ▶️ works for both coded and declarative records.
+- `workspace.openFromLink` handles the new kinds and returns them to the caller; `+page.svelte` renders `ApiResultModal.svelte` (pretty-printed JSON, «Копировать URL» / «Копировать JSON», error display).
+- `runCode` context gained `params` (params from the link) and `link.execute(recordId, params?)` / `link.recordJson(id)` / `link.listJson(id)` helpers (see `linkApi`). The `return` value of `runCode` is now surfaced in the API panel: `DynamicForm`/`DynamicList` `handleRun` capture it and call `workspace.showApiResult(...)`.
+- Building links: `buildExecuteUrl` / `buildRecordJsonUrl` / `buildListJsonUrl`; `buildUrl` emits `#/r/{id}.execute(<JSON.stringify(params)>).json`.
+
 ### Action history («🕘 История» — change journal)
 
 History is a **change journal** stored in a real system table (`meta_tables.name = 'history'`, `type = 'system'`, hidden from main-mode groups via `config.hiddenInMain`). It is seeded idempotently by `metadata.ensureSystemTables()` (Supabase + local IndexedDB cache) at app start (`+page.svelte`) and at the beginning of each `runFullSync` cycle, before `pullMetadata`. The «Событие» column is added to existing installs by the same idempotent seed (`ensureHistoryColumns` creates only missing columns).
@@ -287,40 +305,64 @@ Each table type defines its own:
 
 Built-in types: `directory` (Справочник), `document` (Документ), `constant` (Константа — single auto-created record, optional periodic values via «Периоды» sub-table), `tabular` (Табличная часть), `template` (Шаблон). Custom types (e.g. `HTTP-request`) are stored in `meta_table_types`.
 
+### Deleting a type / changing a table's type
+
+- **Deleting** (`Sidebar.handleDeleteType`): blocked **only while the type has tables with records**. If the type's tables are all empty, they are deleted cascade (`metadata.deleteTableCascade`) together with the type (`deleteTableTypeFromDB`).
+- **Changing a table's type** (ConfiguratorForm «Тип таблицы» select; top-level tables only, transitions to/from `constant`/`system`/`tabular` forbidden — those have hardcoded behavior): on save `metadata.updateTableType` writes `meta_tables.type` (server + local cache so the next `pullMetadata` doesn't revert it), the table's `config.features` / `statusReadOnly` overrides are reset to the new type's defaults (otherwise the explicit per-table overrides would hide the change), and `metadata.normalizeRecordStatuses` moves records whose status isn't in the new type to its first status — with a safe fallback to the Postgres `record_status` enum values (`draft`/`posted`/`marked_for_deletion`) only. Skipped when the new type supports all enum statuses.
+
+### Type presets editor (`TypeConfiguratorForm.svelte`)
+
+Shared tab `form_SYSTEM_TYPE_CONFIGURATOR_ID` — opened via `workspace.openTypeConfigurator` (✎ on a type row in the sidebar, or «🗂 Предустановки типа» in the table configurator), rendered by `Workspace.svelte`, excluded from the URL-hash sync. `recordId` holds the current type name; the header `<select>` switches types within the tab (confirm if dirty). It shows/edits a type's **presets**:
+
+- **Statuses**: value/label/icon/badgeClass/isReadOnly/role (`posted`/`deleted`) — add/remove/reorder (▲/▼/✕).
+- **Features**: the 10 `FEATURE_KEYS` checkboxes.
+- **Fields template**: columns auto-created when a table of this type is created.
+- **Custom actions**: read-only list (labels/icons).
+
+Save calls `saveTableTypeDefinitionDB(name, label, definition)` — writes the **raw** definition (actions as-is, so `showWhen`/`showWhenNot`/`disabledWhen` survive), unlike `saveTableTypeToDB` which serializes function predicates. Editing a **built-in** type creates/updates an override row in `meta_table_types` (it wins over the registry via the merge `{...builtinRegistry, ...$dyn}`); deleting that row reverts to the built-in preset.
+
 ### `ActionDef` → `ActionDefDB` conversion
 
 Runtime `ActionDef` uses function predicates: `show?: (status) => boolean`. DB serialization uses strings: `showWhen`, `showWhenNot`, `disabledWhen`. Conversion happens in `syncTableTypes()`.
 
 ### Key helpers (`index.ts`)
 
-| Function                                          | Purpose                                                  |
-| ------------------------------------------------- | -------------------------------------------------------- |
-| `getTableType(type)`                              | Returns merged type module                               |
-| `getActions(type, mode, config?)`                 | Filters actions by type (list/form) minus hidden         |
-| `isReadOnly(type, status, config?)`               | Checks config overrides then type StatusDef              |
-| `getEffectiveConfig(table)`                       | Merges table config with type default features           |
-| `syncTableTypes()`                                | Fetches from `meta_table_types`, populates dynamic store |
-| `saveTableTypeToDB()` / `deleteTableTypeFromDB()` | CRUD + re-sync                                           |
+| Function                                          | Purpose                                                                      |
+| ------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `getTableType(type)`                              | Returns merged type module                                                   |
+| `getActions(type, mode, config?)`                 | Filters actions by type (list/form) minus hidden                             |
+| `isReadOnly(type, status, config?)`               | Checks config overrides then type StatusDef                                  |
+| `getEffectiveConfig(table)`                       | Merges table config with type default features                               |
+| `syncTableTypes()`                                | Fetches from `meta_table_types`, populates dynamic store                     |
+| `saveTableTypeToDB()` / `deleteTableTypeFromDB()` | CRUD + re-sync                                                               |
+| `saveTableTypeDefinitionDB()`                     | Writes a **raw** type definition (presets editor), preserving action strings |
 
 ---
 
 ## Field Types System
 
-| Module   | type         | label                        | FormField                    | Configurator                     |
-| -------- | ------------ | ---------------------------- | ---------------------------- | -------------------------------- |
-| string   | `'string'`   | Строка                       | `<input type="text">`        | —                                |
-| textarea | `'textarea'` | Текст                        | `<textarea>`                 | —                                |
-| number   | `'number'`   | Число                        | `<input type="number">`      | —                                |
-| boolean  | `'boolean'`  | Булево                       | `<input type="checkbox">`    | —                                |
-| date     | `'date'`     | Дата                         | `<input type="date">`        | —                                |
-| datetime | `'datetime'` | Дата и время                 | DateTimeField                | —                                |
-| birth    | `'birth'`    | День рождения                | BirthField (date + timezone) | —                                |
-| jsonb    | `'jsonb'`    | JSON                         | JsonField (textarea + parse) | —                                |
-| link     | `'link'`     | Ссылка                       | LookupInput wrapper          | LinkConfig (select target table) |
-| file     | `'file'`     | Файл                         | FileField (single upload)    | —                                |
-| zip      | `'zip'`      | ZIP-архив (несколько файлов) | ZipField (multi + pack)      | —                                |
+| Module    | type          | label                        | FormField                                    | Configurator                     |
+| --------- | ------------- | ---------------------------- | -------------------------------------------- | -------------------------------- |
+| string    | `'string'`    | Строка                       | `<input type="text">`                        | —                                |
+| textarea  | `'textarea'`  | Текст                        | `<textarea>`                                 | —                                |
+| number    | `'number'`    | Число                        | `<input type="number">`                      | —                                |
+| boolean   | `'boolean'`   | Булево                       | `<input type="checkbox">`                    | —                                |
+| date      | `'date'`      | Дата                         | `<input type="date">`                        | —                                |
+| datetime  | `'datetime'`  | Дата и время                 | DateTimeField                                | —                                |
+| birth     | `'birth'`     | День рождения                | BirthField (date + timezone)                 | —                                |
+| jsonb     | `'jsonb'`     | JSON                         | JsonField (textarea + parse)                 | —                                |
+| link      | `'link'`      | Ссылка                       | LookupInput wrapper                          | LinkConfig (select target table) |
+| file      | `'file'`      | Файл                         | FileField (single upload)                    | —                                |
+| zip       | `'zip'`       | ZIP-архив (несколько файлов) | ZipField (multi + pack)                      | —                                |
+| universal | `'universal'` | Универсальное                | UniversalField (type select + chosen editor) | —                                |
 
 **Note**: DynamicForm resolves fields dynamically via `{@const FC = fieldRegistry[col.type]?.FormField}` — adding a new field type module to the registry is sufficient; no DynamicForm edits required.
+
+**Universal field (`universal`)**: per-record value is `{ t: type, v: value }` — each record in a table can use its own type (string, datetime, number, link, …). `UniversalField.svelte` shows a type `<select>` (candidates = all registered types with an editor, minus `universal`) and the chosen type's `FormField` bound to `value.v`; switching type resets `v` to that type's default. `formatFieldValue` formats by `t`; `DynamicList` resolves `t === 'link'` cells via the existing `linkDisplay` map (bulkGet by id — table-agnostic). `LookupInput` with an empty `targetTableId` performs a **universal search across all top-level tables** (each suggestion shows its table title), so links work without configuring `related_table_id`. `saveToDb` parses `t === 'jsonb'` values into real JSON. Requires Postgres enum value (`supabase/migrations/0004_add_universal_column_type.sql`).
+
+**Constants**: a `constant` table with `config.manyRecords` (`getEffectiveConfig` reads it; constructor checkbox «🗂 Несколько констант в одной таблице») becomes a normal multi-row list — `DynamicList` skips the single-record auto-create/auto-open effect for it, and saving auto-enables `create`. Periodic constants: `mainColName`/`mainColType` resolve to the universal or `value` column (not `columns[0]`); the header value is disabled **only while the record has period lines** (`hasPeriodLines`), so plain and periodic constants coexist in one table; `PeriodsTable` renders a `UniversalField` per row when `valueType === 'universal'` (each constant keeps its own value type across periods).
+
+**Constants seed** (`src/lib/state/constants.ts`, called from `metadata.ensureSystemTables()` after `ensureApiQueryTables()`): idempotently creates «Константы» (`name='constants'`, `type='constant'`, `config.manyRecords=true` + `features.create=true` + `periodic=true`) with columns `number`/`name`/`value`(universal)/`description` and its child tabular «Периоды» (`name='constants_periods'`, `period` date + `value` universal) via the same `ensureTable`/`ensureColumns` helpers used by notifications/apiQueries. The seed only ensures existence and missing columns — it never overrides the server config/columns the user edits in the constructor, so it coexists with a manually-created table.
 
 ### File / ZIP fields
 

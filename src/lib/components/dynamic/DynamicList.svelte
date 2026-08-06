@@ -6,15 +6,9 @@
 	import { getTableType, getEffectiveConfig, findParentColumn } from '$lib/table-types';
 	import { formatFieldValue } from '$lib/fields';
 	import { physicalDeleteRecords } from '$lib/services/records';
-	import {
-		apiCall,
-		runActionCode,
-		runAnotherTable,
-		saveRecordWithLines
-	} from '$lib/services/actionRunner';
+	import { runRecordAction, mergeParams } from '$lib/services/actionRunner';
 	import { metadata } from '$lib/state/metadata';
-	import { supabase } from '$lib/db/supabase';
-	import { buildRecordUrl, fullUrlFor, linkApi } from '$lib/services/deeplink';
+	import { buildExecuteUrl, buildRecordUrl, fullUrlFor } from '$lib/services/deeplink';
 	import { liveQuery } from 'dexie';
 	import Toolbar from './Toolbar.svelte';
 	import './erpTable.css';
@@ -60,8 +54,11 @@
 
 	// Для констант: автоматически создаём единственную запись и открываем её форму.
 	// Подавление повторного открытия живёт в workspace (переживает перемонтирование списка).
+	// Таблицы с config.manyRecords — «одна таблица, много констант»: ведут себя как
+	// обычный список (записи добавляются кнопкой ➕ Создать), автозапись не создаём.
 	$effect(() => {
-		if (tableType !== 'constant' || workspace.isConstantAutoOpenSuppressed(tableId)) return;
+		if (tableType !== 'constant' || tableMeta?.config?.manyRecords) return;
+		if (workspace.isConstantAutoOpenSuppressed(tableId)) return;
 		if (!tableMeta || loading) return;
 		if (records.length === 0) {
 			db.data_records.put({
@@ -166,7 +163,11 @@
 	let linkDisplay = $state<Record<string, string>>({});
 
 	$effect(() => {
-		const linkCols = columns.filter((c) => c.type === 'link');
+		const linkCols = columns.filter(
+			(c) =>
+				c.type === 'link' ||
+				(c.type === 'universal' && records.some((r) => r.data?.[c.name]?.t === 'link'))
+		);
 		if (linkCols.length === 0) {
 			linkDisplay = {};
 			return;
@@ -175,7 +176,8 @@
 		for (const col of linkCols) {
 			for (const r of filteredAndSortedRecords) {
 				const v = r.data?.[col.name];
-				if (v && typeof v === 'string') ids.add(v);
+				const id = col.type === 'link' ? v : v?.t === 'link' ? v?.v : null;
+				if (id && typeof id === 'string') ids.add(id);
 			}
 		}
 		const idArr = [...ids];
@@ -186,8 +188,9 @@
 				for (const col of linkCols) {
 					for (const r of filteredAndSortedRecords) {
 						const v = r.data?.[col.name];
-						if (!v) continue;
-						map[`${col.id}:${v}`] = rows.find((row) => row?.id === v)?.data?.name ?? String(v);
+						const id = col.type === 'link' ? v : v?.t === 'link' ? v?.v : null;
+						if (!id) continue;
+						map[`${col.id}:${id}`] = rows.find((row) => row?.id === id)?.data?.name ?? String(id);
 					}
 				}
 				linkDisplay = map;
@@ -395,28 +398,22 @@
 		printerService.printRecords(tableId, cleanIds);
 	}
 
-	// ▶️ Выполнить: запуск пользовательского JS-кода по выбранным записям
+	// ▶️ Выполнить: код действия по выбранным записям (или декларативный вызов
+	// API-сервиса, если код не задан). Результат — в панели «API».
 	async function handleRun() {
-		const code = tableMeta?.config?.runCode;
-		if (!code?.trim())
-			return alert('Код действия не задан. Откройте конфигуратор таблицы → «Выполнить (JS-код)».');
 		if (selectedIds.length === 0) return alert('Выберите строки');
 		const selected = records.filter((r) => selectedIds.includes(r.id));
-		try {
-			await runActionCode(code, {
-				record: selected[0] ?? null,
-				records: selected,
-				lines: [],
-				db,
-				supabase,
-				save: saveRecordWithLines,
-				log: (...args) => console.log('[Выполнить]', ...args),
-				link: linkApi,
-				apiCall,
-				run: runAnotherTable
+		const result = await runRecordAction(selected[0]?.id ?? '', mergeParams(selected[0] ?? null));
+		if (selected.length === 1 && selected[0]) {
+			const num = selected[0].data?.number || selected[0].data?.name;
+			workspace.showApiResult({
+				href: buildExecuteUrl(selected[0].id),
+				label: `${tableMeta?.title ?? ''} №${num || '…'} · Выполнить`,
+				ok: result.ok,
+				value: result.ok ? result.value : undefined,
+				error: result.error,
+				executedAt: new Date().toISOString()
 			});
-		} catch (e: any) {
-			alert(`Ошибка выполнения кода: ${e?.message ?? e}`);
 		}
 	}
 
@@ -441,6 +438,10 @@
 		// Ссылка хранит id записи — показываем наименование связанной записи
 		if (col.type === 'link' && raw) {
 			return linkDisplay[`${col.id}:${raw}`] ?? String(raw);
+		}
+		// Универсальное поле: если в записи выбран тип «Ссылка» — то же поведение
+		if (col.type === 'universal' && raw?.t === 'link' && raw.v) {
+			return linkDisplay[`${col.id}:${raw.v}`] ?? String(raw.v);
 		}
 		return formatFieldValue(col.type, raw);
 	}

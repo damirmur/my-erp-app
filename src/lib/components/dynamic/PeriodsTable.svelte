@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { LocalLine } from '$lib/db/indexeddb';
+	import UniversalField from '$lib/fields/UniversalField.svelte';
 
 	// Таблица периодов периодической константы: дата (ISO) + значение
 	let { lines = $bindable([]), onChange = null, readOnly = false, valueType = 'string' } = $props();
@@ -9,6 +10,7 @@
 	function defaultForType(type: string): any {
 		if (type === 'number') return 0;
 		if (type === 'boolean') return false;
+		if (type === 'universal') return { t: 'string', v: '' };
 		return '';
 	}
 
@@ -100,7 +102,13 @@
 							/>
 						</td>
 						<td>
-							{#if valueType === 'number'}
+							{#if valueType === 'universal'}
+								<UniversalField
+									bind:value={line.data.value}
+									disabled={readOnly}
+									onChange={() => onChange?.()}
+								/>
+							{:else if valueType === 'number'}
 								<input
 									type="number"
 									step="any"

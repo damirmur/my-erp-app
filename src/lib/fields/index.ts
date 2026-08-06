@@ -10,6 +10,7 @@ import linkField from './link';
 import jsonbField from './jsonb';
 import fileField from './file';
 import zipField from './zip';
+import universalField from './universal';
 
 export type { FieldTypeModule } from './field';
 
@@ -24,7 +25,8 @@ export const fieldRegistry: Record<string, FieldTypeModule> = {
 	link: linkField,
 	jsonb: jsonbField,
 	file: fileField,
-	zip: zipField
+	zip: zipField,
+	universal: universalField
 };
 
 export const fieldTypeList: FieldTypeModule[] = Object.values(fieldRegistry);
@@ -36,6 +38,9 @@ export function fieldTypeLabel(type: string): string {
 // Форматирование значения ячейки списка по типу поля
 export function formatFieldValue(type: string, raw: any): string {
 	if (raw == null || raw === '') return '';
+	if (type === 'universal' && raw && typeof raw === 'object' && typeof raw.t === 'string') {
+		return formatFieldValue(raw.t, raw.v);
+	}
 	if (type === 'file' && typeof raw === 'object') {
 		return raw.name ? `📄 ${raw.name}` : '';
 	}

@@ -4,17 +4,11 @@
 	import { printerService } from '$lib/services/printer';
 	import { numberService } from '$lib/services/numbers';
 	import { physicalDeleteRecords } from '$lib/services/records';
-	import {
-		apiCall,
-		runActionCode,
-		runAnotherTable,
-		saveRecordWithLines
-	} from '$lib/services/actionRunner';
-	import { supabase } from '$lib/db/supabase';
+	import { runRecordAction } from '$lib/services/actionRunner';
 	import { isReadOnly, findParentColumn } from '$lib/table-types';
 	import { fieldRegistry } from '$lib/fields';
 	import { isValidBirthLocal, defaultBirth } from '$lib/fields/birth';
-	import { buildRecordUrl, fullUrlFor, linkApi } from '$lib/services/deeplink';
+	import { buildExecuteUrl, buildRecordUrl, fullUrlFor } from '$lib/services/deeplink';
 	import Toolbar from './Toolbar.svelte';
 	import TabularSection from './TabularSection.svelte';
 	import PeriodsTable from './PeriodsTable.svelte';
@@ -32,15 +26,20 @@
 	let loading = $state(true);
 
 	// Типы полей, у которых метка всегда над полем (не помещаются в одну строку)
-	const wideFieldTypes = ['textarea', 'file', 'zip'];
+	const wideFieldTypes = ['textarea', 'file', 'zip', 'universal'];
 
 	let tableType = $derived(tableMeta?.type ?? 'document');
 	let tableConfig = $derived(tableMeta?.config ?? {});
 	let readOnly = $derived(isReadOnly(tableType, recordStatus, tableConfig));
 	let isConstant = $derived(tableType === 'constant');
 	let isPeriodic = $derived(tableConfig.periodic === true && isConstant);
-	let mainColName = $derived(columns[0]?.name ?? 'value');
-	let mainColType = $derived(columns[0]?.type ?? 'string');
+	// Поле значения константы: универсальное или классическое «value» (не первая
+	// колонка — в таблице констант может быть «Код»/«Наименование» перед значением).
+	let mainValueCol = $derived(
+		columns.find((c) => c.type === 'universal' || c.name === 'value') ?? null
+	);
+	let mainColName = $derived(mainValueCol?.name ?? columns[0]?.name ?? 'value');
+	let mainColType = $derived(mainValueCol?.type ?? columns[0]?.type ?? 'string');
 
 	let activeSubTable = $derived(objectSubTables[activeSubTabIndex]);
 
@@ -49,6 +48,11 @@
 	// TabularSection binds to it via `bind:lines`, so all mutations (push, splice, modify)
 	// are tracked by Svelte 5's reactive proxy.
 	let activeSubTableLines = $state<LocalLine[]>([]);
+
+	// У периодической константы значение в шапке блокируется, только когда у
+	// записи ЕСТЬ строки периодов; пока периодов нет — значение можно вводить
+	// напрямую (в одной таблице могут быть и периодические, и обычные константы).
+	let hasPeriodLines = $derived(activeSubTableLines.some((l) => l.data?.period));
 
 	// Plain backup copies for ALL sub-tables (used only to persist data across tab switches and for saving)
 	let subTableBackup: Record<string, LocalLine[]> = {};
@@ -138,7 +142,13 @@
 		columns.forEach((col) => {
 			if (recordData[col.name] === undefined) {
 				recordData[col.name] =
-					col.type === 'boolean' ? false : col.type === 'birth' ? defaultBirth() : '';
+					col.type === 'boolean'
+						? false
+						: col.type === 'birth'
+							? defaultBirth()
+							: col.type === 'universal'
+								? { t: 'string', v: '' }
+								: '';
 			}
 		});
 
@@ -214,6 +224,25 @@
 			}
 			try {
 				recordData[col.name] = JSON.parse(String(raw));
+			} catch {
+				alert(`Поле "${col.title}": некорректный JSON. Сохранение отменено.`);
+				return;
+			}
+		}
+
+		// В «Универсальном» поле с типом jsonb значение .v тоже хранится строкой —
+		// разбираем его в объект, чтобы запись была настоящим JSON
+		for (const col of columns) {
+			if (col.type !== 'universal') continue;
+			const uni = recordData[col.name];
+			if (uni?.t !== 'jsonb') continue;
+			const raw = uni.v;
+			if (raw == null || String(raw).trim() === '') {
+				uni.v = null;
+				continue;
+			}
+			try {
+				uni.v = JSON.parse(String(raw));
 			} catch {
 				alert(`Поле "${col.title}": некорректный JSON. Сохранение отменено.`);
 				return;
@@ -359,36 +388,24 @@
 		}
 	}
 
-	// ▶️ Выполнить: запуск пользовательского JS-кода по текущей записи
+	// ▶️ Выполнить: код действия таблицы по текущей записи (или декларативный
+	// вызов API-сервиса, если код не задан). Результат — в панели «API».
 	async function handleRun() {
 		if (recordId === 'new') return alert('Сначала сохраните запись');
-		const code = tableMeta?.config?.runCode;
-		if (!code?.trim())
-			return alert('Код действия не задан. Откройте конфигуратор таблицы → «Выполнить (JS-код)».');
-		const record = await db.data_records.get(recordId);
-		if (!record) return alert('Запись не найдена');
-		const lines = await db.data_lines.where('record_id').equals(recordId).toArray();
-		try {
-			await runActionCode(code, {
-				record,
-				records: [record],
-				lines,
-				db,
-				supabase,
-				save: saveRecordWithLines,
-				log: (...args) => console.log('[Выполнить]', ...args),
-				link: linkApi,
-				apiCall,
-				run: runAnotherTable
-			});
-			const updated = await db.data_records.get(recordId);
-			if (updated) {
-				recordData = { ...(updated.data ?? {}) };
-			}
-			workspace.setDirty(tabId, false);
-		} catch (e: any) {
-			alert(`Ошибка выполнения кода: ${e?.message ?? e}`);
+		const result = await runRecordAction(recordId);
+		const updated = await db.data_records.get(recordId);
+		if (updated) {
+			recordData = { ...(updated.data ?? {}) };
 		}
+		workspace.setDirty(tabId, false);
+		workspace.showApiResult({
+			href: buildExecuteUrl(recordId),
+			label: `${tableTitle} №${recordData.number || recordData.name || '…'} · Выполнить`,
+			ok: result.ok,
+			value: result.ok ? result.value : undefined,
+			error: result.error,
+			executedAt: new Date().toISOString()
+		});
 	}
 
 	async function handleDelete() {
@@ -488,14 +505,14 @@
 					<div class="form-field" class:wide={wideFieldTypes.includes(col.type)}>
 						<label for={col.id}>
 							{col.title}
-							{#if isPeriodic && col.name === mainColName}
+							{#if isPeriodic && col.name === mainColName && hasPeriodLines}
 								<span class="field-note">(актуальное значение)</span>
 							{/if}
 						</label>
 						{#if FC}
 							<FC
 								bind:value={recordData[col.name]}
-								disabled={readOnly || (isPeriodic && col.name === mainColName)}
+								disabled={readOnly || (isPeriodic && col.name === mainColName && hasPeriodLines)}
 								onChange={markAsDirty}
 								relatedTableId={col.related_table_id ?? ''}
 							/>

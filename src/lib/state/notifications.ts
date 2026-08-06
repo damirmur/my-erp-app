@@ -390,7 +390,7 @@ export async function ensureColumns(
 
 // Запись в локальный кэш (и на сервер, если онлайн). is_dirty=1 — в ближайшем
 // цикле синка запись уедет в Supabase через обычный pushLocalChanges.
-async function seedRecord(record: LocalRecord, online: boolean): Promise<void> {
+export async function seedRecord(record: LocalRecord, online: boolean): Promise<void> {
 	await db.data_records.put(record);
 	if (online) {
 		try {
@@ -403,7 +403,7 @@ async function seedRecord(record: LocalRecord, online: boolean): Promise<void> {
 
 // Есть ли на сервере записи таблицы. Онлайн-сид сверяется с сервером, чтобы
 // после очистки локального кэша не плодить дубликаты каналов/сервисов.
-async function hasServerRows(tableId: string, online: boolean): Promise<boolean> {
+export async function hasServerRows(tableId: string, online: boolean): Promise<boolean> {
 	if (!online) return false;
 	try {
 		const { count } = await supabase

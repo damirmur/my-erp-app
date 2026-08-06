@@ -11,6 +11,7 @@
 		getEffectiveConfig,
 		FEATURE_KEYS,
 		FEATURE_LABELS,
+		tableTypeList,
 		type TableTypeModule
 	} from '$lib/table-types';
 
@@ -69,6 +70,7 @@
 		hiddenActions: string[];
 		statusReadOnly: Record<string, boolean>;
 		periodic: boolean;
+		manyRecords: boolean;
 		runCode: string;
 		hiddenInMain: boolean;
 	}>({
@@ -76,6 +78,7 @@
 		hiddenActions: [],
 		statusReadOnly: {},
 		periodic: false,
+		manyRecords: false,
 		runCode: '',
 		hiddenInMain: false
 	});
@@ -83,6 +86,25 @@
 
 	// Синоним таблицы (черновик)
 	let tableSynonym = $state('');
+
+	// Черновик типа таблицы (null — тип менять нельзя)
+	let selectedType = $state<string | null>(null);
+
+	// Типы, куда разрешено переводить таблицу: без жёстко завязанных
+	// на логику constant/system/tabular.
+	const FORBIDDEN_TYPES = ['constant', 'system', 'tabular'];
+	let typeOptions = $derived.by(() => {
+		const list = [...$tableTypeList].filter((t) => !FORBIDDEN_TYPES.includes(t.type));
+		list.sort((a, b) => a.label.localeCompare(b.label));
+		return list;
+	});
+	// ТЧ и жёсткие типы не переводимы
+	let canChangeType = $derived(
+		!!selectedTableMeta &&
+			!selectedTableMeta.parent_table_id &&
+			!!selectedType &&
+			!FORBIDDEN_TYPES.includes(selectedTableMeta.type)
+	);
 
 	let saving = $state(false);
 
@@ -132,12 +154,14 @@
 		if (!selectedTableMeta) return;
 		tableSynonym = selectedTableMeta.title;
 		selectedTypeDef = getTableType(selectedTableMeta.type);
+		selectedType = selectedTableMeta.type;
 		const effective = getEffectiveConfig(selectedTableMeta);
 		editConfig = {
 			features: { ...effective.features },
 			hiddenActions: [...(effective.hiddenActions ?? [])],
 			statusReadOnly: { ...(effective.statusReadOnly ?? {}) },
 			periodic: effective.periodic ?? false,
+			manyRecords: selectedTableMeta.config?.manyRecords ?? false,
 			runCode: selectedTableMeta.config?.runCode ?? '',
 			hiddenInMain: selectedTableMeta.config?.hiddenInMain ?? false
 		};
@@ -313,10 +337,49 @@
 		if (!selectedTableMeta) return;
 		saving = true;
 		try {
+			// Смена типа: подтверждаем заранее и применяем фичи/статусы нового типа,
+			// иначе у таблицы останутся явные переопределения и ничего не поменяется.
+			const typeChanged = canChangeType && selectedType !== selectedTableMeta.type;
+			if (typeChanged && selectedType) {
+				const oldType = getTableType(selectedTableMeta.type);
+				const newType = getTableType(selectedType);
+				const firstStatus = newType.statuses[0]?.label ?? 'draft';
+				if (
+					!confirm(
+						`Сменить тип с «${oldType.label}» на «${newType.label}»?\n\n` +
+							`Будут применены фичи и статусы типа «${newType.label}», а записи со ` +
+							`статусами, которых нет в этом типе, переведутся в «${firstStatus}».`
+					)
+				) {
+					return;
+				}
+			}
+
+			// «Много констант в таблице» без возможности создания бесполезно — включаем автоматически
+			if (selectedTableMeta.type === 'constant' && editConfig.manyRecords) {
+				editConfig.features.create = true;
+			}
 			if (tableSynonym !== selectedTableMeta.title) {
 				await metadata.updateTableTitle(selectedTableId, tableSynonym);
 			}
+			// Фичи/readOnly перезаписываем до сохранения конфига
+			if (typeChanged && selectedType) {
+				const newType = getTableType(selectedType);
+				editConfig.features = { ...newType.features };
+				editConfig.statusReadOnly = {};
+			}
 			await metadata.updateTableConfig(selectedTableId, editConfig);
+			if (typeChanged && selectedType) {
+				const newType = getTableType(selectedType);
+				const ok = await metadata.updateTableType(selectedTableId, selectedType);
+				if (ok) {
+					await metadata.normalizeRecordStatuses(
+						selectedTableId,
+						newType.statuses.map((s) => s.value),
+						newType.statuses[0]?.value ?? 'draft'
+					);
+				}
+			}
 
 			// Реквизиты шапки
 			// Нормализуем порядок: устраняем дубли sort_order (новые реквизиты получают 10)
@@ -464,6 +527,46 @@
 					placeholder="Синоним (рус.)"
 				/>
 			</div>
+
+			<div class="field-group">
+				<label for="cfg-type">Тип таблицы</label>
+				{#if canChangeType}
+					<select
+						id="cfg-type"
+						bind:value={selectedType}
+						onchange={markDirty}
+						class="cfg-type-select"
+					>
+						{#each typeOptions as t}
+							<option value={t.type}>{t.label} ({t.type})</option>
+						{/each}
+					</select>
+					<div class="cfg-type-hint">
+						Тип определяет набор кнопок (фичи), статусы записей и шаблон полей.
+					</div>
+				{:else}
+					<input
+						id="cfg-type"
+						type="text"
+						value={selectedTableMeta.type}
+						disabled
+						class="cfg-type-select"
+						title="Типы constant/system/tabular и табличные части сменить нельзя"
+					/>
+				{/if}
+				<button
+					onclick={() =>
+						workspace.openTypeConfigurator(
+							selectedType ?? selectedTableMeta!.type,
+							getTableType(selectedType ?? selectedTableMeta!.type).label
+						)}
+					class="btn-cancel"
+					style="align-self:flex-start;"
+					title="Открыть предустановки типа в редакторе типов"
+				>
+					🗂 Предустановки типа
+				</button>
+			</div>
 		{/if}
 
 		{#if selectedTableMeta && selectedTableId}
@@ -599,6 +702,16 @@
 									📅 Периодическая (значения по датам, создаётся таблица «Периоды»)
 								</label>
 							</div>
+							<div class="cfg-status-readonly">
+								<label class="cfg-check">
+									<input
+										type="checkbox"
+										bind:checked={editConfig.manyRecords}
+										onchange={markDirty}
+									/>
+									🗂 Несколько констант в одной таблице (обычный список, включается «Создание»)
+								</label>
+							</div>
 						{/if}
 
 						{#if editConfig.features.run}
@@ -608,7 +721,7 @@
 									bind:value={editConfig.runCode}
 									oninput={markDirty}
 									rows="10"
-									placeholder={`// Доступно как переменные:\n// record — текущая запись {id, data, status,...}\n// records — выбранные записи\n// lines — строки ТЧ текущей записи\n// db — локальная БД (Dexie)\n// supabase — облачный клиент\n// save(record, lines?) — сохранить изменения (is_dirty=1)\n// log(...args) — вывод в консоль\n\nrecord.data.total_amount = 42;\nawait save(record);`}
+									placeholder={`// Доступно как переменные:\n// record — текущая запись {id, data, status,...}\n// records — выбранные записи\n// lines — строки ТЧ текущей записи\n// params — входные параметры (#/r/{id}.execute({...}).json)\n// db — локальная БД (Dexie)\n// supabase — облачный клиент\n// save(record, lines?) — сохранить изменения (is_dirty=1)\n// log(...args) — вывод в консоль\n// return value — результат покажется в панели «API»\n\nrecord.data.total_amount = 42;\nawait save(record);\nreturn { ok: true, city: params.city };`}
 								></textarea>
 								<div class="cfg-hint">
 									Код выполняется в браузере. Пример: <code
@@ -813,6 +926,13 @@
 		font-size: 0.8rem;
 		font-weight: 600;
 		color: #475569;
+	}
+	.cfg-type-select {
+		width: 100%;
+	}
+	.cfg-type-hint {
+		font-size: 0.75rem;
+		color: #64748b;
 	}
 	input,
 	select {

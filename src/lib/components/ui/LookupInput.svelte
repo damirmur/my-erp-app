@@ -18,6 +18,8 @@
 	let searchQuery = $state('');
 	let isOpen = $state(false);
 	let suggestions = $state<LocalRecord[]>([]);
+	// Заголовки таблиц для универсального поиска (когда targetTableId не задан)
+	let tableTitles = $state<Record<string, string>>({});
 	let dropdownRef = $state<HTMLDivElement | null>(null);
 
 	// Значение поля — id выбранной записи (как в 1С: «Ссылка» = id).
@@ -47,21 +49,35 @@
 
 	// Подписка на живой поиск в IndexedDB
 	$effect(() => {
-		if (!isOpen || !targetTableId) return;
+		if (!isOpen) return;
 
 		const observable = liveQuery(async () => {
-			// Ищем напрямую по переданному targetTableId
-			const records = await db.data_records.where('table_id').equals(targetTableId).toArray();
+			// targetTableId задан — ищем в конкретном справочнике;
+			// пуст — универсальный поиск по всем таблицам верхнего уровня
+			// (нужно для «Универсального» поля со ссылкой на любую таблицу).
+			let records: LocalRecord[];
+			let titles: Record<string, string> = {};
+			if (targetTableId) {
+				records = await db.data_records.where('table_id').equals(targetTableId).toArray();
+			} else {
+				const tables = await db.meta_tables.filter((t) => !t.parent_table_id).toArray();
+				titles = Object.fromEntries(tables.map((t) => [t.id, t.title]));
+				const topIds = new Set(tables.map((t) => t.id));
+				const all = await db.data_records.toArray();
+				records = all.filter((r) => topIds.has(r.table_id));
+			}
 
-			return records.filter((r) => {
-				const name = (r.data.name || '').toLowerCase();
-				return name.includes(searchQuery.toLowerCase());
-			});
+			const q = searchQuery.toLowerCase();
+			return {
+				records: records.filter((r) => (r.data.name || '').toLowerCase().includes(q)),
+				titles
+			};
 		});
 
 		const sub = observable.subscribe({
 			next: (data) => {
-				suggestions = data;
+				suggestions = data.records;
+				tableTitles = data.titles;
 			},
 			error: (err) => console.error('Ошибка поиска в справочнике:', err)
 		});
@@ -145,6 +161,8 @@
 						<span class="item-title">{record.data.name}</span>
 						{#if record.data.sku}
 							<span class="item-meta">Арт: {record.data.sku}</span>
+						{:else if !targetTableId && tableTitles[record.table_id]}
+							<span class="item-meta">{tableTitles[record.table_id]}</span>
 						{/if}
 					</button>
 				{/each}

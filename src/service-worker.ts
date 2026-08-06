@@ -26,12 +26,15 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
 	if (event.request.method !== 'GET') return;
+	// Кросс-доменные запросы (API-режим: wttr.in, Nominatim и т.п.) не перехватываем:
+	// браузер выполнит их напрямую с обычным CORS, а кэшировать их всё равно нельзя.
+	if (!event.request.url.startsWith(self.location.origin)) return;
 	// Network-first: сначала берём свежий ответ с сервера (важно в dev, где URL модулей
 	// не хешируются), кэшируем успешные ответы и отдаём кэш только при офлайне.
 	event.respondWith(
 		fetch(event.request)
 			.then((response) => {
-				if (response.ok && event.request.url.startsWith(self.location.origin)) {
+				if (response.ok) {
 					const copy = response.clone();
 					caches.open(CACHE).then((cache) => cache.put(event.request, copy));
 				}

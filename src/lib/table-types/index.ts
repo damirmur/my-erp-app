@@ -216,3 +216,15 @@ export async function deleteTableTypeFromDB(name: string) {
 	if (error) throw error;
 	await syncTableTypes();
 }
+
+// Сохранить полное определение типа из редактора типов. В отличие от
+// saveTableTypeToDB работает с «сырыми» данными (actions как есть), поэтому
+// перезапись не теряет showWhen/showWhenNot/disabledWhen у действий.
+export async function saveTableTypeDefinitionDB(
+	name: string,
+	label: string,
+	definition: Record<string, any>
+) {
+	await saveTypeRow(name, label, definition);
+	await syncTableTypes();
+}

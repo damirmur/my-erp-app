@@ -1,4 +1,5 @@
 import { parseHash, resolveLink } from '$lib/services/deeplink';
+import { runApiCommand, type ApiCommandResult } from '$lib/services/apiCommand';
 import { db } from '$lib/db/indexeddb';
 import { supabase } from '$lib/db/supabase';
 import { HISTORY_TABLE_NAME } from '$lib/state/metadata';
@@ -30,6 +31,10 @@ class WorkspaceManager {
 	activeTabId = $state<string | null>(null);
 	sidebarCollapsed = $state(false);
 	mode = $state<'main' | 'constructor'>('main');
+
+	// Панель «API»: результат API-команды (#/t/{id}.json, #/r/{id}.json,
+	// #/r/{id}.execute({...}).json) или возвращаемое значение «▶️ Выполнить».
+	apiResult = $state<ApiCommandResult | null>(null);
 
 	// Таблицы-константы, форма которых уже открывалась автоматически (или закрыта вручную).
 	// Подавление переживает перемонтирование списка и сбрасывается при открытии списка заново.
@@ -185,6 +190,15 @@ class WorkspaceManager {
 		const link = parseHash(linkHash);
 		if (!link) return false;
 
+		// API-режим: данные/выполнение кода без открытия формы или списка.
+		// Результат показывается в панели «API» (apiResult).
+		if (link.kind === 'execute' || link.kind === 'recordJson' || link.kind === 'listJson') {
+			const result = await runApiCommand(link);
+			if (!result) return false;
+			this.apiResult = result;
+			return true;
+		}
+
 		if (link.kind === 'list') {
 			const resolved = await resolveLink(link);
 			if (!resolved || resolved.kind !== 'list') return false;
@@ -297,6 +311,29 @@ class WorkspaceManager {
 		this.closeTabForce(`form_SYSTEM_CONFIUGRATOR_ID_${tableId}`);
 	}
 
+	// 8a. Открыть вкладку редактора типов. Вкладка общая (одна на все типы):
+	// recordId хранит текущий тип, переключение типов внутри вкладки меняет его.
+	openTypeConfigurator(typeName: string, label: string) {
+		const tabId = 'form_SYSTEM_TYPE_CONFIGURATOR_ID';
+		const title = `🗂 Тип: ${label}`;
+		const existing = this.tabs.find((t) => t.id === tabId);
+		if (existing) {
+			existing.recordId = typeName;
+			existing.title = title;
+			this.activeTabId = tabId;
+			return;
+		}
+		this.tabs.push({
+			id: tabId,
+			type: 'form',
+			tableId: 'SYSTEM_TYPE_CONFIGURATOR_ID',
+			recordId: typeName,
+			title,
+			isDirty: false
+		});
+		this.activeTabId = tabId;
+	}
+
 	// 9. Установить флаг модифицированности (вызывается при вводе данных в инпуты)
 	setDirty(tabId: string, isDirty: boolean) {
 		const tab = this.tabs.find((t) => t.id === tabId);
@@ -321,6 +358,16 @@ class WorkspaceManager {
 	// 12. Проверить, подавлено ли автооткрытие формы константы
 	isConstantAutoOpenSuppressed(tableId: string): boolean {
 		return this.constantFormOpened.has(tableId);
+	}
+
+	// 13. Показать результат в панели «API» (из «▶️ Выполнить» или API-ссылки)
+	showApiResult(result: ApiCommandResult) {
+		this.apiResult = result;
+	}
+
+	// 14. Закрыть панель «API»
+	closeApiResult() {
+		this.apiResult = null;
 	}
 }
 

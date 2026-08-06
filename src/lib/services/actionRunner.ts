@@ -4,11 +4,12 @@ import { buildRecordUrl, linkApi } from '$lib/services/deeplink';
 import { workspace } from '$lib/state/workspace.svelte';
 
 // Контекст, передаваемый в пользовательский код действия «Выполнить».
-// Доступно из кода: record, records, lines, db, supabase, save(), log(), link, apiCall(), run().
+// Доступно из кода: record, records, lines, params, db, supabase, save(), log(), link, apiCall(), run().
 export interface RunActionContext {
 	record: LocalRecord | null; // Текущая запись (в форме — открытая; в списке — первая выбранная)
 	records: LocalRecord[]; // Выбранные записи (в форме — [record])
 	lines: LocalLine[]; // Строки табличных частей текущей записи (если есть)
+	params: Record<string, any>; // Входные параметры (API-режим: #/r/{id}.execute({...}).json)
 	db: typeof db;
 	supabase: typeof supabase;
 	save: (record: LocalRecord, lines?: LocalLine[]) => Promise<void>;
@@ -19,13 +20,14 @@ export interface RunActionContext {
 }
 
 // Выполнение JS-кода действия в браузере. Код — тело async-функции.
-// Переменные контекста (record, records, lines, db, supabase, save, log, link, apiCall, run)
+// Переменные контекста (record, records, lines, params, db, supabase, save, log, link, apiCall, run)
 // доступны в коде как локальные имена без префикса ctx.
 export async function runActionCode(code: string, ctx: RunActionContext): Promise<unknown> {
 	const paramNames = [
 		'record',
 		'records',
 		'lines',
+		'params',
 		'db',
 		'supabase',
 		'save',
@@ -37,6 +39,23 @@ export async function runActionCode(code: string, ctx: RunActionContext): Promis
 	const values = paramNames.map((k) => (ctx as unknown as Record<string, unknown>)[k]);
 	const fn = new Function(...paramNames, `return (async () => {\n${code}\n})();`);
 	return await fn(...values);
+}
+
+// Слияние входных параметров: дефолты из jsonb-поля «Параметры» записи
+// (record.data.params) переопределяются параметрами из ссылки/кнопки по ключу.
+// Для записей без дефолтов возвращает просто параметры вызова.
+export function mergeParams(
+	record: LocalRecord | null,
+	linkParams: Record<string, any> = {}
+): Record<string, any> {
+	const defaults =
+		record?.data &&
+		typeof record.data.params === 'object' &&
+		record.data.params !== null &&
+		!Array.isArray(record.data.params)
+			? (record.data.params as Record<string, any>)
+			: {};
+	return { ...defaults, ...(linkParams ?? {}) };
 }
 
 // Хелпер «Выполнить»: запускает код действия другой таблицы по её имени
@@ -53,6 +72,7 @@ export async function runAnotherTable(tableName: string, recordId: string): Prom
 		record,
 		records: [record],
 		lines,
+		params: mergeParams(record),
 		db,
 		supabase,
 		save: saveRecordWithLines,
@@ -61,6 +81,81 @@ export async function runAnotherTable(tableName: string, recordId: string): Prom
 		apiCall,
 		run: runAnotherTable
 	});
+}
+
+// API-режим: выполнить код действия таблицы по конкретной записи без открытия
+// формы/списка (deep-link #/r/{id}.execute({...}).json или кнопка «▶️ Выполнить»).
+// Параметры ссылки сливаются с дефолтами записи (jsonb «Параметры») через
+// mergeParams и попадают в контекст как `params`; возвращаемое кодом значение —
+// в result.value. Если код действия не задан — декларативный вызов apiCall
+// (см. ниже). Никогда не бросает исключений (ошибки — в result.error).
+export interface RunRecordResult {
+	ok: boolean;
+	value?: unknown;
+	error?: string;
+}
+
+export async function runRecordAction(
+	recordId: string,
+	params: Record<string, any> = {}
+): Promise<RunRecordResult> {
+	try {
+		const record = await db.data_records.get(recordId);
+		if (!record) return { ok: false, error: 'Запись не найдена: ' + recordId };
+		const table = (await db.meta_tables.get(record.table_id)) ?? null;
+		if (!table) return { ok: false, error: 'Таблица записи не найдена' };
+		// Слияние дефолтов записи (jsonb «Параметры») с параметрами вызова
+		params = mergeParams(record, params);
+		const code = table.config?.runCode;
+		if (!code?.trim()) {
+			// Декларативный режим без кода действия:
+			// 1) «API-запрос» (каталог api_queries): есть ссылка «Сервис» на
+			//    api_services → apiCall(сервис, params);
+			// 2) запись-сервис: есть base_url → apiCall(запись, params).
+			// Ссылка #/r/{id}.execute({...}).json становится готовым endpoint'ом.
+			if (record.data?.service) {
+				const serviceRecord = await db.data_records.get(String(record.data.service));
+				if (!serviceRecord) {
+					return { ok: false, error: 'Сервис API не найден по ссылке' };
+				}
+				const res = await apiCall(serviceRecord, params);
+				return {
+					ok: res.ok,
+					value: res.data ?? res.raw,
+					error: res.ok ? undefined : `HTTP ${res.status}: ${String(res.raw).slice(0, 300)}`
+				};
+			}
+			if (record.data?.base_url) {
+				const res = await apiCall(record, params);
+				return {
+					ok: res.ok,
+					value: res.data ?? res.raw,
+					error: res.ok ? undefined : `HTTP ${res.status}: ${String(res.raw).slice(0, 300)}`
+				};
+			}
+			return {
+				ok: false,
+				error: `У таблицы «${table.title}» не задан код действия «Выполнить»`
+			};
+		}
+		const lines = await db.data_lines.where('record_id').equals(record.id).toArray();
+		const value = await runActionCode(code, {
+			record,
+			records: [record],
+			lines,
+			params,
+			db,
+			supabase,
+			save: saveRecordWithLines,
+			log: (...args) => console.log('[Выполнить API]', ...args),
+			link: linkApi,
+			apiCall,
+			run: runAnotherTable
+		});
+		return { ok: true, value };
+	} catch (e: any) {
+		return { ok: false, error: e?.message ?? String(e) };
+	}
 }
 
 // Шлюз astro3d по умолчанию (для старых записей с use_proxy=true). Для новых
@@ -125,29 +220,47 @@ export async function apiCall(
 
 	const noBody = method === 'GET' || method === 'HEAD';
 	let res: Response;
-	if (useProxy) {
-		const gatewayUrl = proxySvc?.data?.base_url || PROXY_URL;
-		const gatewayKey = proxySvc?.data?.api_key || d.api_key || '';
-		res = await fetch(gatewayUrl, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({
-				notify_key: gatewayKey,
-				url,
+	try {
+		if (useProxy) {
+			const gatewayUrl = proxySvc?.data?.base_url || PROXY_URL;
+			const gatewayKey = proxySvc?.data?.api_key || d.api_key || '';
+			res = await fetch(gatewayUrl, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					notify_key: gatewayKey,
+					url,
+					method,
+					query,
+					headers,
+					...(noBody ? {} : { body })
+				})
+			});
+		} else {
+			const u = new URL(url, typeof window !== 'undefined' ? window.location.origin : undefined);
+			for (const [k, v] of Object.entries(query)) u.searchParams.set(k, v);
+			// Content-Type добавляем только при наличии тела: для простых GET/POST без
+			// тела application/json спровоцировал бы CORS-preflight (и «Failed to fetch»).
+			const requestHeaders = { ...headers };
+			if (!noBody) requestHeaders['Content-Type'] = 'application/json';
+			res = await fetch(u.toString(), {
 				method,
-				query,
-				headers,
-				...(noBody ? {} : { body })
-			})
-		});
-	} else {
-		const u = new URL(url, typeof window !== 'undefined' ? window.location.origin : undefined);
-		for (const [k, v] of Object.entries(query)) u.searchParams.set(k, v);
-		res = await fetch(u.toString(), {
-			method,
-			headers: { 'Content-Type': 'application/json', ...headers },
-			...(noBody ? {} : { body: JSON.stringify(body ?? {}) })
-		});
+				headers: requestHeaders,
+				...(noBody ? {} : { body: JSON.stringify(body ?? {}) })
+			});
+		}
+	} catch (e: any) {
+		const custom = Object.keys(headers).filter((k) => k !== 'Content-Type');
+		throw new Error(
+			`Не удалось выполнить запрос ${method} ${url}` +
+				(useProxy ? ' через шлюз' : ' (прямой fetch из браузера)') +
+				`: ${e?.message ?? e}` +
+				(useProxy
+					? ''
+					: custom.length > 0
+						? `. Обычная причина — CORS: из-за пользовательских заголовков (${custom.join(', ')}) браузер шлёт preflight, который внешний API не поддерживает. Уберите лишние заголовки в поле «Заголовки» сервиса или укажите сервис-шлюз в поле «Прокси».`
+						: '. Возможно, внешний API не разрешает CORS — укажите сервис-шлюз в поле «Прокси»')
+		);
 	}
 
 	const raw = await res.text();

@@ -54,6 +54,7 @@
 			if (col.type === 'boolean') data[col.name] = false;
 			else if (col.type === 'birth') data[col.name] = defaultBirth();
 			else if (col.type === 'number') data[col.name] = 0;
+			else if (col.type === 'universal') data[col.name] = { t: 'string', v: '' };
 			else data[col.name] = '';
 		}
 		return data;

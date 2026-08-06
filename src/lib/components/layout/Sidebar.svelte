@@ -433,14 +433,40 @@
 	}
 
 	async function handleDeleteType(typeName: string, typeLabel: string) {
-		const count = tablesByType[typeName]?.length ?? 0;
-		if (count > 0) {
-			alert(`Нельзя удалить тип "${typeLabel}": в нём ${count} таблиц(а). Сначала удалите их.`);
-			return;
+		const tables = tablesByType[typeName] ?? [];
+		if (tables.length > 0) {
+			// Разрешаем удаление, только если у типа нет таблиц с данными.
+			// Пустые таблицы (ошибочно созданные) удаляем вместе с типом.
+			const withData: LocalTable[] = [];
+			const empty: LocalTable[] = [];
+			for (const t of tables) {
+				const n = await db.data_records.where('table_id').equals(t.id).count();
+				(n > 0 ? withData : empty).push(t);
+			}
+			if (withData.length > 0) {
+				alert(
+					`Нельзя удалить тип "${typeLabel}": таблица(ы) «${withData
+						.map((t) => t.title)
+						.join('», «')}» содержат данные. Удалите данные или смените их тип.`
+				);
+				return;
+			}
+			if (
+				!confirm(
+					`Тип "${typeLabel}" содержит пустые таблицы: «${empty
+						.map((t) => t.title)
+						.join('», «')}». Удалить их вместе с типом?`
+				)
+			)
+				return;
+			for (const t of empty) {
+				await metadata.deleteTableCascade(t.id);
+			}
 		}
 		if (!confirm(`Удалить тип "${typeLabel}" (${typeName})?`)) return;
 		try {
 			await deleteTableTypeFromDB(typeName);
+			await syncService.runFullSync();
 		} catch (e: any) {
 			alert(`Ошибка удаления типа: ${e?.message ?? e}`);
 		}
@@ -691,6 +717,12 @@
 									<span class="type-row-label">{groupTitle(t.type, t.label)}</span>
 									<span class="nav-item-code">{t.type}</span>
 									<span class="type-count">{tablesByType[t.type]?.length ?? 0}</span>
+									<button
+										class="row-edit-btn"
+										onclick={() =>
+											workspace.openTypeConfigurator(t.type, groupTitle(t.type, t.label))}
+										title="Предустановки типа">✎</button
+									>
 									<button
 										class="row-del-btn"
 										onclick={() => handleDeleteType(t.type, t.label)}
@@ -1097,7 +1129,28 @@
 			opacity 0.15s,
 			background-color 0.15s;
 	}
-	.tree-row:hover .row-del-btn {
+	.row-edit-btn {
+		background: none;
+		border: none;
+		color: #64748b;
+		font-size: 0.75rem;
+		padding: 2px 6px;
+		border-radius: 0.25rem;
+		cursor: pointer;
+		flex-shrink: 0;
+		visibility: hidden;
+		opacity: 0;
+		transition:
+			opacity 0.15s,
+			background-color 0.15s;
+	}
+	.row-edit-btn:hover {
+		background: #e2e8f0;
+		color: #1f2937;
+	}
+	.tree-row:hover .row-del-btn,
+	.type-row:hover .row-edit-btn,
+	.type-row:hover .row-del-btn {
 		visibility: visible;
 		opacity: 1;
 	}

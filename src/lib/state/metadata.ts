@@ -4,6 +4,8 @@ import { getTableType } from '$lib/table-types';
 import { ensureNotificationTables } from '$lib/state/notifications';
 import { ensureSchedulerTables } from '$lib/state/scheduler';
 import { ensureSettingsTable } from '$lib/state/settings';
+import { ensureApiQueryTables } from '$lib/state/apiQueries';
+import { ensureConstantsTable } from '$lib/state/constants';
 
 // Имя системной таблицы-истории действий. Уникально в meta_tables, используется
 // для поиска таблицы и в recordHistory/clearHistory/сайдбаре.
@@ -137,6 +139,14 @@ class MetadataManager {
 		// Документ «Расписание» для периодической рассылки (например, погоды).
 		// Исполняет Go-сервер 24/7; здесь создаются только метаданные таблиц.
 		await ensureSchedulerTables();
+
+		// Каталог «API-запросы»: внешние запросы (сервис + параметры-дефолты),
+		// вызываемые по deep-link #/r/{id}.execute({...}).json или кнопкой ▶️.
+		await ensureApiQueryTables();
+
+		// Таблица «Константы»: одна таблица на все константы (много записей,
+		// универсальное поле «Значение», периодичность через ТЧ «Периоды»).
+		await ensureConstantsTable();
 
 		// Таблица настроек приложения (порядок меню основного режима и т.п.).
 		await ensureSettingsTable();
@@ -320,6 +330,53 @@ class MetadataManager {
 			return null;
 		}
 		return tableId;
+	}
+
+	// Смена типа таблицы: обновляем и на сервере, и в локальном кэше
+	// (иначе изменение затёр бы следующий pullMetadata).
+	async updateTableType(tableId: string, type: string): Promise<boolean> {
+		const { error } = await supabase.from('meta_tables').update({ type }).eq('id', tableId);
+		if (error) {
+			alert(`Ошибка смены типа: ${error.message}`);
+			return false;
+		}
+		const local = await db.meta_tables.get(tableId);
+		if (local) await db.meta_tables.put({ ...local, type });
+		return true;
+	}
+
+	// Записи, чей статус не поддерживается новым типом, приводим к fallback
+	// (первый статус нового типа). Postgres enum record_status допускает только
+	// draft/posted/marked_for_deletion — остальные значения схлопываем в draft.
+	async normalizeRecordStatuses(
+		tableId: string,
+		validStatuses: string[],
+		fallback: string
+	): Promise<void> {
+		const ENUM = ['draft', 'posted', 'marked_for_deletion'] as const;
+		type RecStatus = (typeof ENUM)[number];
+		const safeFallback: RecStatus = (ENUM as readonly string[]).includes(fallback)
+			? (fallback as RecStatus)
+			: 'draft';
+		// Из валидных статусов нового типа оставляем только те, что реально хранятся в enum
+		const validEnum = validStatuses.filter((s) => (ENUM as readonly string[]).includes(s));
+
+		if (validEnum.length === ENUM.length) {
+			// Новый тип поддерживает все статусы — ничего нормализовывать не нужно
+			return;
+		}
+		let q = supabase.from('data_records').update({ status: safeFallback }).eq('table_id', tableId);
+		if (validEnum.length > 0) q = q.not('status', 'in', `(${validEnum.join(',')})`);
+		const { error } = await q;
+		if (error) alert(`Ошибка нормализации статусов: ${error.message}`);
+
+		// Локальный кэш: записи с неизвестным статусом → fallback
+		const valid = new Set(validStatuses);
+		const records = await db.data_records.where('table_id').equals(tableId).toArray();
+		const updates = records
+			.filter((r) => !valid.has(r.status))
+			.map((r) => ({ ...r, status: safeFallback }));
+		if (updates.length > 0) await db.data_records.bulkPut(updates);
 	}
 
 	// Обновление синонима (заголовка) таблицы

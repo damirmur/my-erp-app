@@ -7,6 +7,7 @@ export interface TableConfig {
 	hiddenActions?: string[];
 	statusReadOnly?: Record<string, boolean>;
 	periodic?: boolean; // для типа constant: периодическое значение
+	manyRecords?: boolean; // для типа constant: несколько записей в одной таблице (список констант)
 	runCode?: string; // JS-код действия «▶️ Выполнить» (выполняется в браузере)
 	hiddenInMain?: boolean; // скрыть таблицу из основного режима
 }
@@ -38,7 +39,8 @@ export interface LocalColumn {
 		| 'link'
 		| 'parent_link'
 		| 'file'
-		| 'zip';
+		| 'zip'
+		| 'universal';
 	related_table_id?: string;
 	related_table_name?: string;
 	sort_order: number;

@@ -7,6 +7,7 @@
 	import DynamicList from '../dynamic/DynamicList.svelte';
 	import DynamicForm from '../dynamic/DynamicForm.svelte';
 	import ConfiguratorForm from '../dynamic/ConfiguratorForm.svelte';
+	import TypeConfiguratorForm from '../dynamic/TypeConfiguratorForm.svelte';
 
 	let syncing = $state(false);
 
@@ -18,7 +19,12 @@
 		if (!tab || typeof history === 'undefined') return;
 		if (tab.type === 'list' && tab.tableId !== 'SYSTEM_CONFIUGRATOR_ID') {
 			replaceState(buildListUrl(tab.tableId), {});
-		} else if (tab.type === 'form' && tab.recordId) {
+		} else if (
+			tab.type === 'form' &&
+			tab.recordId &&
+			tab.tableId !== 'SYSTEM_CONFIUGRATOR_ID' &&
+			tab.tableId !== 'SYSTEM_TYPE_CONFIGURATOR_ID'
+		) {
 			replaceState(buildRecordUrl(tab.recordId), {});
 		}
 	});
@@ -127,6 +133,11 @@
 				<ConfiguratorForm
 					tabId={workspace.activeTab.id}
 					tableId={workspace.activeTab.recordId ?? ''}
+				/>
+			{:else if workspace.activeTab.tableId === 'SYSTEM_TYPE_CONFIGURATOR_ID'}
+				<TypeConfiguratorForm
+					tabId={workspace.activeTab.id}
+					typeName={workspace.activeTab.recordId ?? ''}
 				/>
 			{:else if workspace.activeTab.type === 'list'}
 				<DynamicList tableId={workspace.activeTab.tableId} tabId={workspace.activeTab.id} />

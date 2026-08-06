@@ -3,6 +3,7 @@ import { supabase } from '$lib/db/supabase';
 import { buildRecordUrl, linkApi } from '$lib/services/deeplink';
 import { workspace } from '$lib/state/workspace.svelte';
 import { flowHelper, type FlowStep } from '$lib/services/flowRunner';
+import { autoFillDocumentFields } from '$lib/services/numbers';
 
 // Контекст, передаваемый в пользовательский код действия «Выполнить».
 // Доступно из кода: record, records, lines, params, db, supabase, save(), log(),
@@ -322,8 +323,13 @@ function toPlain(value: unknown): any {
 }
 
 // Сохранение изменённой кодом записи: локально (is_dirty=1) + строки ТЧ.
-// Серверная синхронизация произойдёт в ближайшем цикле sync.
+// Серверная синхронизация произойдёт в ближайшем цикле sync. Перед записью
+// документа автозаполняются служебные поля: пустая дата — сегодня, пустой
+// номер — следующий в пределах года (см. numbers.ts).
 export async function saveRecordWithLines(record: LocalRecord, lines?: LocalLine[]): Promise<void> {
+	const autoData = await autoFillDocumentFields(record.table_id, record.data ?? {});
+	record = { ...record, data: autoData };
+
 	await db.transaction('rw', [db.data_records, db.data_lines], async () => {
 		await db.data_records.put({
 			...record,

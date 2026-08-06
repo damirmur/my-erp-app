@@ -2,7 +2,7 @@
 	import { db, type LocalColumn, type LocalTable, type LocalLine } from '$lib/db/indexeddb';
 	import { workspace } from '$lib/state/workspace.svelte';
 	import { printerService } from '$lib/services/printer';
-	import { numberService } from '$lib/services/numbers';
+	import { autoFillDocumentFields, todayIso } from '$lib/services/numbers';
 	import { physicalDeleteRecords } from '$lib/services/records';
 	import { runRecordAction } from '$lib/services/actionRunner';
 	import { isReadOnly, findParentColumn } from '$lib/table-types';
@@ -145,10 +145,8 @@
 			recordData = { value: '' };
 			recordStatus = 'draft';
 		} else {
-			const prefix =
-				tableTitle.includes('Накладная') || tableTitle.includes('Реализация') ? 'РН-' : 'СП-';
-			const nextNum = await numberService.getNextNumber(tableId, prefix);
-			recordData = { number: nextNum, date: new Date().toISOString().split('T')[0] };
+			// Новая запись: дата = сегодня, номер — следующий в пределах года.
+			recordData = await autoFillDocumentFields(tableId, {});
 			recordStatus = 'draft';
 		}
 
@@ -297,6 +295,11 @@
 			});
 		}
 
+		// При записи: пустая дата подставляется текущей, пустой номер — следующий
+		// в пределах года (и для программных путей сохранения тоже — см. saveRecordWithLines).
+		const autoData = await autoFillDocumentFields(tableId, cleanData);
+		recordData = { ...recordData, ...autoData };
+
 		try {
 			// Родитель в форме задаётся колонкой-ссылкой на саму таблицу («Родитель»);
 			// синхронизируем его в отдельное поле parent_id, по которому строится иерархия.
@@ -310,7 +313,7 @@
 					status: targetStatus as any,
 					is_folder: false,
 					parent_id: parentId,
-					data: { ...cleanData, total_amount: totalAmount },
+					data: { ...autoData, total_amount: totalAmount },
 					is_dirty: 1,
 					updated_at: new Date().toISOString()
 				});
@@ -458,14 +461,13 @@
 			});
 		}
 
-		const prefix =
-			tableTitle.includes('Накладная') || tableTitle.includes('Реализация') ? 'РН-' : 'СП-';
-		const nextFreeNumber = await numberService.getNextNumber(tableId, prefix);
-		const newRecordData = {
+		// Копия: свежий номер (в пределах года) и сегодняшняя дата.
+		const newRecordData = await autoFillDocumentFields(tableId, {
 			...cleanData,
-			number: nextFreeNumber,
-			date: new Date().toISOString().split('T')[0]
-		};
+			number: '',
+			date: todayIso()
+		});
+		const nextFreeNumber = newRecordData.number ?? '';
 
 		await db.transaction('rw', [db.data_records, db.data_lines], async () => {
 			await db.data_records.put({

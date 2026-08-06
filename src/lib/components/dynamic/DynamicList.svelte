@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { db, type LocalColumn, type LocalRecord, type LocalTable } from '$lib/db/indexeddb';
 	import { workspace } from '$lib/state/workspace.svelte';
-	import { numberService } from '$lib/services/numbers';
+	import { autoFillDocumentFields, todayIso } from '$lib/services/numbers';
 	import { printerService } from '$lib/services/printer';
 	import { getTableType, getEffectiveConfig, findParentColumn } from '$lib/table-types';
 	import { formatFieldValue } from '$lib/fields';
@@ -319,17 +319,14 @@
 
 		const sourceLines = await db.data_lines.where('record_id').equals(sourceId).toArray();
 		const newRecordId = crypto.randomUUID();
-		const prefix =
-			tableMeta?.title?.includes('Накладная') || tableMeta?.title?.includes('Реализация')
-				? 'РН-'
-				: 'СП-';
-		const nextFreeNumber = await numberService.getNextNumber(tableId, prefix);
 
-		const newRecordData: Record<string, any> = {
+		// Копия: свежий номер (в пределах года) и сегодняшняя дата.
+		const newRecordData: Record<string, any> = await autoFillDocumentFields(tableId, {
 			...sourceRecord.data,
-			number: nextFreeNumber,
-			date: new Date().toISOString().split('T')[0]
-		};
+			number: '',
+			date: todayIso()
+		});
+		const nextFreeNumber = newRecordData.number ?? '';
 		if (parentColumnName) newRecordData[parentColumnName] = currentFolderId ?? '';
 
 		await db.transaction('rw', [db.data_records, db.data_lines], async () => {

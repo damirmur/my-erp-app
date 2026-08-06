@@ -8,6 +8,7 @@ import {
 	type ResolvedLink
 } from '$lib/services/deeplink';
 import { runRecordAction } from '$lib/services/actionRunner';
+import type { FlowStep } from '$lib/services/flowRunner';
 
 // Результат API-команды для панели «API»: либо данные записи/списка как JSON,
 // либо результат выполнения кода действия (execute) с входными параметрами.
@@ -17,6 +18,7 @@ export interface ApiCommandResult {
 	ok: boolean;
 	value?: unknown;
 	error?: string;
+	steps?: FlowStep[];
 	executedAt: string;
 }
 
@@ -34,6 +36,7 @@ export async function runApiCommand(link: DeepLink): Promise<ApiCommandResult | 
 				ok: result.ok,
 				value: result.value,
 				error: result.error,
+				steps: result.steps,
 				executedAt
 			};
 		}

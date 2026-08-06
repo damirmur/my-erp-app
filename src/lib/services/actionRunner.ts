@@ -2,7 +2,7 @@ import { db, type LocalLine, type LocalRecord } from '$lib/db/indexeddb';
 import { supabase } from '$lib/db/supabase';
 import { buildRecordUrl, linkApi } from '$lib/services/deeplink';
 import { workspace } from '$lib/state/workspace.svelte';
-import { flowHelper } from '$lib/services/flowRunner';
+import { flowHelper, type FlowStep } from '$lib/services/flowRunner';
 
 // Контекст, передаваемый в пользовательский код действия «Выполнить».
 // Доступно из кода: record, records, lines, params, db, supabase, save(), log(),
@@ -104,6 +104,7 @@ export interface RunRecordResult {
 	ok: boolean;
 	value?: unknown;
 	error?: string;
+	steps?: FlowStep[];
 }
 
 export async function runRecordAction(
@@ -122,7 +123,7 @@ export async function runRecordAction(
 		// flowRunner даже если у таблицы не задан свой runCode (см. сид flows.ts).
 		if (table.type === 'flow' && !table.config?.runCode?.trim()) {
 			const value = await flowHelper(record.id, params);
-			return { ok: true, value };
+			return { ok: true, value, steps: extractSteps(value) };
 		}
 
 		const code = table.config?.runCode;
@@ -172,10 +173,16 @@ export async function runRecordAction(
 			run: runAnotherTable,
 			flow: flowHelper
 		});
-		return { ok: true, value };
+		return { ok: true, value, steps: extractSteps(value) };
 	} catch (e: any) {
-		return { ok: false, error: e?.message ?? String(e) };
+		return { ok: false, error: e?.message ?? String(e), steps: (e as any)?.steps };
 	}
+}
+
+// Шаги сценария из результата выполнения (FlowRunResult содержит steps).
+function extractSteps(value: unknown): FlowStep[] | undefined {
+	const s = (value as any)?.steps;
+	return Array.isArray(s) && s.length > 0 ? s : undefined;
 }
 
 // Шлюз astro3d по умолчанию (для старых записей с use_proxy=true). Для новых

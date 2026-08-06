@@ -37,9 +37,18 @@ export interface FlowEdge {
 	label: string;
 }
 
+// Статус шага (узла) сценария после исполнения: выполнен / ошибка / не выполнялся.
+export interface FlowStep {
+	name: string;
+	status: 'ok' | 'error' | 'pending';
+	error?: string;
+	durationMs?: number;
+}
+
 export interface FlowRunResult {
 	results: Record<string, unknown>;
 	last: unknown;
+	steps: FlowStep[];
 }
 
 // Названия табличных частей (стабильные, из сида)
@@ -186,7 +195,7 @@ export async function flowExecute(
 
 	const nodes = allLines.filter((l) => l.table_id === nodesTable.id);
 	const linkLines = allLines.filter((l) => l.table_id === linksTable.id);
-	if (nodes.length === 0) return { results: {}, last: null };
+	if (nodes.length === 0) return { results: {}, last: null, steps: [] };
 
 	const nodeById = new Map(nodes.map((n) => [n.id, n]));
 
@@ -242,56 +251,97 @@ export async function flowExecute(
 	// узел мог ссылаться на результат ЛЮБОГО предыдущего узла (${имя_узла}).
 	const context: Record<string, any> = { ...(scenarioParams ?? {}) };
 
-	// Волновая обработка: каждая волна — параллельное исполнение всех готовых узлов
-	while (ready.length > 0) {
-		const wave = [...ready];
-		ready = [];
-
-		const waveResults = await Promise.all(
-			wave.map((node) => {
-				const ins = incoming.get(node.id) ?? [];
-				const inputs: Record<string, unknown> = {};
-				for (const e of ins) {
-					inputs[e.role] = results[e.from!];
-				}
-				return executeNode(node, inputs, scenario, allLines, context);
-			})
-		);
-
-		wave.forEach((node, i) => {
-			const value = waveResults[i];
-			results[node.id] = value;
-			done.add(node.id);
-			readySet.delete(node.id);
-			// Результат узла доступен последующим узлам по его наименованию
-			const title = nodeTitle(node);
-			context[title] = value;
-			if (value && typeof value === 'object' && !Array.isArray(value)) {
-				Object.assign(context, value);
-			}
-		});
-
-		// Освобождаем зависимые узлы
-		for (const node of wave) {
-			for (const e of outgoing.get(node.id) ?? []) {
-				if (!e.to || done.has(e.to)) continue;
-				const rem = (remaining.get(e.to) ?? 0) - 1;
-				remaining.set(e.to, rem);
-				if (rem === 0 && !readySet.has(e.to) && !done.has(e.to)) {
-					ready.push(nodeById.get(e.to)!);
-					readySet.add(e.to);
-				}
-			}
+	// Статусы шагов: что выполнено, что упало (и с какой ошибкой), что не добралось.
+	const steps: FlowStep[] = [];
+	const stepByName = new Map<string, FlowStep>();
+	function ensureStep(name: string): FlowStep {
+		let s = stepByName.get(name);
+		if (!s) {
+			s = { name, status: 'pending' };
+			steps.push(s);
+			stepByName.set(name, s);
+		}
+		return s;
+	}
+	function markPendingDownstream() {
+		// Не выполненные узлы помечаем как «не добрались»; статус уже существующих
+		// шагов (например, error у упавшего узла) не перезаписываем.
+		for (const n of nodes) {
+			if (!done.has(n.id)) ensureStep(nodeTitle(n));
 		}
 	}
 
-	// Недостижимые узлы (цикл или оторванные) — не молчим
-	const unreachable = nodes.filter((n) => !done.has(n.id));
-	if (unreachable.length > 0) {
-		throw new Error(
-			'Не удалось выполнить узлы (цикл или нет входящих связей): ' +
-				unreachable.map(nodeTitle).join(', ')
-		);
+	// Волновая обработка: каждая волна — параллельное исполнение всех готовых узлов.
+	// Ошибка узла фиксируется в steps и прерывает исполнение (зависимые — «pending»).
+	try {
+		while (ready.length > 0) {
+			const wave = [...ready];
+			ready = [];
+
+			const waveResults = await Promise.all(
+				wave.map(async (node) => {
+					const step = ensureStep(nodeTitle(node));
+					const t0 = performance.now();
+					const ins = incoming.get(node.id) ?? [];
+					const inputs: Record<string, unknown> = {};
+					for (const e of ins) {
+						inputs[e.role] = results[e.from!];
+					}
+					try {
+						const value = await executeNode(node, inputs, scenario, allLines, context);
+						step.status = 'ok';
+						step.durationMs = Math.round(performance.now() - t0);
+						delete step.error;
+						return value;
+					} catch (e: any) {
+						step.status = 'error';
+						step.error = e?.message ?? String(e);
+						step.durationMs = Math.round(performance.now() - t0);
+						throw e;
+					}
+				})
+			);
+
+			wave.forEach((node, i) => {
+				const value = waveResults[i];
+				results[node.id] = value;
+				done.add(node.id);
+				readySet.delete(node.id);
+				// Результат узла доступен последующим узлам по его наименованию
+				const title = nodeTitle(node);
+				context[title] = value;
+				if (value && typeof value === 'object' && !Array.isArray(value)) {
+					Object.assign(context, value);
+				}
+			});
+
+			// Освобождаем зависимые узлы
+			for (const node of wave) {
+				for (const e of outgoing.get(node.id) ?? []) {
+					if (!e.to || done.has(e.to)) continue;
+					const rem = (remaining.get(e.to) ?? 0) - 1;
+					remaining.set(e.to, rem);
+					if (rem === 0 && !readySet.has(e.to) && !done.has(e.to)) {
+						ready.push(nodeById.get(e.to)!);
+						readySet.add(e.to);
+					}
+				}
+			}
+		}
+
+		// Недостижимые узлы (цикл или оторванные) — не молчим
+		const unreachable = nodes.filter((n) => !done.has(n.id));
+		if (unreachable.length > 0) {
+			markPendingDownstream();
+			throw new Error(
+				'Не удалось выполнить узлы (цикл или нет входящих связей): ' +
+					unreachable.map(nodeTitle).join(', ')
+			);
+		}
+	} catch (e: any) {
+		markPendingDownstream();
+		e.steps = steps;
+		throw e;
 	}
 
 	// Последний выполненный узел: тот, у которого нет исходящих рёбер
@@ -308,7 +358,7 @@ export async function flowExecute(
 	const readable: Record<string, unknown> = {};
 	for (const n of nodes) readable[nodeTitle(n)] = results[n.id];
 
-	return { results: readable, last: lastId ? results[lastId] : null };
+	return { results: readable, last: lastId ? results[lastId] : null, steps };
 }
 
 // Хелпер для runCode: выполняет сценарий по id записи.

@@ -438,8 +438,21 @@ async function seedFlowElements(online: boolean, wttrId: string): Promise<Map<st
 		}
 	];
 
-	function same(a: any, b: any): boolean {
-		return JSON.stringify(a) === JSON.stringify(b);
+	// Глубокое сравнение без учёта порядка ключей: jsonb в Postgres сортирует
+	// ключи объектов, поэтому JSON.stringify-сравнение legacy-конфига ломается.
+	function deepEqual(a: any, b: any): boolean {
+		if (a === b) return true;
+		if (typeof a !== typeof b) return false;
+		if (Array.isArray(a) && Array.isArray(b)) {
+			return a.length === b.length && a.every((x, i) => deepEqual(x, b[i]));
+		}
+		if (a && b && typeof a === 'object' && typeof b === 'object') {
+			const ka = Object.keys(a);
+			const kb = Object.keys(b);
+			if (ka.length !== kb.length) return false;
+			return ka.every((k) => deepEqual(a[k], b[k]));
+		}
+		return false;
 	}
 
 	function keyConfig(d: any): Record<string, any> {
@@ -463,7 +476,7 @@ async function seedFlowElements(online: boolean, wttrId: string): Promise<Map<st
 				service: def.service ?? ''
 			};
 			// Элемент всё ещё на старом заводском конфиге — поднимаем до нового дефолта.
-			if (def.legacy && same(keyConfig(existing.data), def.legacy)) {
+			if (def.legacy && deepEqual(keyConfig(existing.data), def.legacy)) {
 				const data = { ...existing.data, ...target };
 				await db.data_records.put({
 					...existing,
@@ -527,7 +540,7 @@ async function seedFlowElements(online: boolean, wttrId: string): Promise<Map<st
 			.filter((r) => r.data?.name === rm.name)
 			.first();
 		if (!existing) continue;
-		if (!same(keyConfig(existing.data), rm.legacy)) continue;
+		if (!deepEqual(keyConfig(existing.data), rm.legacy)) continue;
 		await db.data_records.delete(existing.id);
 		if (online) {
 			try {

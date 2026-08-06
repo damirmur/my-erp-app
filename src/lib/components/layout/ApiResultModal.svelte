@@ -41,6 +41,29 @@
 				{/if}
 			</div>
 
+			{#if result.steps && result.steps.length > 0}
+				<div class="api-steps">
+					{#each result.steps as step (step.name)}
+						<div
+							class="api-step"
+							class:error={step.status === 'error'}
+							class:pending={step.status === 'pending'}
+						>
+							<span class="step-icon"
+								>{step.status === 'ok' ? '✓' : step.status === 'error' ? '✗' : '⋯'}</span
+							>
+							<span class="step-name">{step.name}</span>
+							{#if step.durationMs != null}
+								<span class="step-dur">{step.durationMs} мс</span>
+							{/if}
+							{#if step.error}
+								<div class="step-error">{step.error}</div>
+							{/if}
+						</div>
+					{/each}
+				</div>
+			{/if}
+
 			{#if result.ok}
 				<pre class="api-json"><code>{JSON.stringify(result.value, null, 2)}</code></pre>
 				<div class="api-actions">
@@ -130,6 +153,50 @@
 	}
 	.api-status.error {
 		color: #dc2626;
+	}
+	.api-steps {
+		padding: 0.6rem 0.9rem;
+		border-bottom: 1px solid #f1f5f9;
+		display: flex;
+		flex-direction: column;
+		gap: 0.3rem;
+	}
+	.api-step {
+		display: flex;
+		align-items: flex-start;
+		gap: 0.4rem;
+		font-size: 0.8rem;
+		padding: 0.25rem 0.5rem;
+		background: #f8fafc;
+		border-radius: 0.375rem;
+		border: 1px solid #e2e8f0;
+	}
+	.api-step.error {
+		border-color: #fca5a5;
+		background: #fef2f2;
+	}
+	.api-step.pending {
+		color: #94a3b8;
+	}
+	.step-icon {
+		font-weight: 700;
+	}
+	.api-step.error .step-icon {
+		color: #dc2626;
+	}
+	.step-name {
+		font-weight: 600;
+	}
+	.step-dur {
+		color: #94a3b8;
+		margin-left: auto;
+	}
+	.step-error {
+		width: 100%;
+		color: #b91c1c;
+		font-size: 0.75rem;
+		margin-top: 0.15rem;
+		word-break: break-word;
 	}
 	.api-json {
 		flex: 1;

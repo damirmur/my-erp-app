@@ -420,6 +420,7 @@
 				ok: result.ok,
 				value: result.ok ? result.value : undefined,
 				error: result.error,
+				steps: result.steps,
 				executedAt: new Date().toISOString()
 			});
 		}

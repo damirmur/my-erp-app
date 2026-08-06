@@ -1,6 +1,7 @@
 import { db, type LocalLine, type LocalRecord } from '$lib/db/indexeddb';
 import { supabase } from '$lib/db/supabase';
-import { linkApi } from '$lib/services/deeplink';
+import { buildRecordUrl, linkApi } from '$lib/services/deeplink';
+import { workspace } from '$lib/state/workspace.svelte';
 
 // Контекст, передаваемый в пользовательский код действия «Выполнить».
 // Доступно из кода: record, records, lines, db, supabase, save(), log(), link, apiCall(), run().
@@ -193,4 +194,16 @@ export async function saveRecordWithLines(record: LocalRecord, lines?: LocalLine
 			);
 		}
 	});
+
+	// Журнал изменений: факт сохранения из кода действия (save())
+	try {
+		const table = await db.meta_tables.get(record.table_id);
+		if (table && table.type !== 'system') {
+			const num = record.data?.number || record.data?.name || '';
+			const title = num ? `${table.title} №${num}` : table.title;
+			await workspace.recordHistory(record.table_id, title, buildRecordUrl(record.id), 'save');
+		}
+	} catch {
+		// история — некритично
+	}
 }

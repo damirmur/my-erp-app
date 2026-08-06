@@ -1,16 +1,17 @@
-import {
-	buildLineUrl,
-	buildListUrl,
-	buildRecordUrl,
-	parseHash,
-	resolveLink
-} from '$lib/services/deeplink';
+import { parseHash, resolveLink } from '$lib/services/deeplink';
 import { db } from '$lib/db/indexeddb';
 import { supabase } from '$lib/db/supabase';
 import { HISTORY_TABLE_NAME } from '$lib/state/metadata';
 
 // Максимальная глубина истории действий
 const HISTORY_LIMIT = 50;
+
+// Человекочитаемые подписи статусов записи для события «сохранение»
+const STATUS_LABELS: Record<string, string> = {
+	draft: 'черновик',
+	posted: 'проведён',
+	marked_for_deletion: 'помечен на удаление'
+};
 
 // Описываем интерфейс вкладки нашей ERP-системы
 export interface WorkspaceTab {
@@ -37,11 +38,19 @@ class WorkspaceManager {
 	// Вычисляемое свойство через руну $derived: возвращает объект текущего активного таба
 	activeTab = $derived(this.tabs.find((t) => t.id === this.activeTabId) || null);
 
-	// Записать действие в историю. История хранится в системной таблице «История»
+	// Записать изменение в историю. История хранится в системной таблице «История»
 	// (meta_tables.name = 'history') как обычные записи data_records:
-	// data = { object_title, link, opened_at }. Сам открываемый объект не должен
-	// быть системной таблицей, иначе запись зациклится.
-	async recordHistory(tableId: string, title: string, link: string) {
+	// data = { object_title, link, opened_at, event, event_type }. Сам изменяемый
+	// объект не должен быть системной таблицей, иначе запись зациклится.
+	// Журнал изменений: 'save'/'delete' — каждая операция пишется отдельной записью.
+	// Открытия в историю не фиксируются.
+	async recordHistory(
+		tableId: string,
+		title: string,
+		link: string,
+		event: 'save' | 'delete',
+		status?: string
+	) {
 		try {
 			const meta = await db.meta_tables.get(tableId);
 			if (meta?.type === 'system') return;
@@ -50,18 +59,19 @@ class WorkspaceManager {
 			if (!historyTable) return;
 
 			const now = new Date().toISOString();
-			const existing = await db.data_records.where('table_id').equals(historyTable.id).toArray();
-			const duplicate = existing.find((r) => r.data?.link === link);
+			let eventLabel = 'удаление';
+			if (event === 'save') {
+				eventLabel = status ? `сохранение (${STATUS_LABELS[status] ?? status})` : 'сохранение';
+			}
 
 			await db.transaction('rw', [db.data_records], async () => {
-				if (duplicate) await db.data_records.delete(duplicate.id);
 				await db.data_records.put({
 					id: crypto.randomUUID(),
 					table_id: historyTable.id,
 					status: 'draft',
 					is_folder: false,
 					parent_id: null,
-					data: { object_title: title, link, opened_at: now },
+					data: { object_title: title, link, opened_at: now, event: eventLabel, event_type: event },
 					is_dirty: 1,
 					updated_at: now
 				});
@@ -111,9 +121,6 @@ class WorkspaceManager {
 			});
 			this.activeTabId = tabId;
 		}
-
-		// Фиксируем в истории действий (только успешное открытие реальной таблицы)
-		this.recordHistory(tableId, `${tableTitle} (список)`, buildListUrl(tableId));
 	}
 
 	// 2. Открыть форму элемента/документа (аналог ФормыЭлемента/ФормыДокумента в 1С)
@@ -140,11 +147,6 @@ class WorkspaceManager {
 			isDirty: recordId === 'new' // Новая запись сразу считается измененной
 		});
 		this.activeTabId = tabId;
-
-		// В историю попадают только существующие записи (не черновики «Новый»)
-		if (recordId !== 'new') {
-			this.recordHistory(tableId, title, buildRecordUrl(actualRecordId));
-		}
 	}
 
 	// 2.1. Открыть форму записи и выделить в ней строку табличной части.
@@ -175,8 +177,6 @@ class WorkspaceManager {
 			});
 			this.activeTabId = tabId;
 		}
-
-		this.recordHistory(tableId, `${tableTitle} (строка)`, buildLineUrl(lineId));
 	}
 
 	// 2.2. Открыть объект по уникальной ссылке (#/t/..., #/r/..., #/l/...).

@@ -416,6 +416,25 @@ async function hasServerRows(tableId: string, online: boolean): Promise<boolean>
 	}
 }
 
+// Есть ли в каталоге «Сервисы API» запись с данным name (на сервере или локально).
+// Нужно для досева новых дефолтных сервисов в уже заполненный каталог.
+async function serviceExists(servicesId: string, name: string, online: boolean): Promise<boolean> {
+	if (online) {
+		try {
+			const { data } = await supabase
+				.from('data_records')
+				.select('data')
+				.eq('table_id', servicesId)
+				.limit(1000);
+			if ((data ?? []).some((r: any) => r.data?.name === name)) return true;
+		} catch {
+			// сервер недоступен — проверяем локальный кэш
+		}
+	}
+	const local = await db.data_records.where('table_id').equals(servicesId).toArray();
+	return local.some((r) => r.data?.name === name);
+}
+
 // id таблицы по name (сначала сервер, потом локальный кэш). Для «Контрагентов»:
 // таблица существует на сервере, но в пустом локальном кэше её ещё может не быть.
 export async function findTableIdByName(name: string): Promise<string | null> {
@@ -601,11 +620,13 @@ async function reconcileMessageTabular(
 }
 
 // Данные по умолчанию: три стандартных канала и каталог сервисов astro3d.ru/api
-// (прокси-шлюз, уведомления, астрологические сервисы) + пример wttr.in без прокси.
-// Сидятся только если таблица пуста и локально, и на сервере. Сервисы со ссылкой
-// на «Прокси» работают через шлюз, wttr.in — напрямую. Ключи не сидятся:
-// «Ключ доступа» сервиса-прокси (значение NOTIFY_KEY сервера) и «Ключ доступа»
-// уведомлений заполняются в UI. Дефолтные получатели — тоже.
+// (прокси-шлюз, уведомления, астрологические сервисы) + пример wttr.in без прокси
+// + геокодинг OpenStreetMap (Nominatim). Сервисы со ссылкой на «Прокси» работают
+// через шлюз, wttr.in и Nominatim — напрямую. Пустую таблицу сидим целиком; в уже
+// заполненный каталог (существующая установка) недостающие записи досеиваем по
+// name (else-ветка). Ключи не сидятся: «Ключ доступа» сервиса-прокси (значение
+// NOTIFY_KEY сервера) и «Ключ доступа» уведомлений заполняются в UI. Дефолтные
+// получатели — тоже.
 async function seedDefaults(
 	servicesId: string,
 	channelsId: string,
@@ -636,126 +657,144 @@ async function seedDefaults(
 	}
 
 	const services = await db.data_records.where('table_id').equals(servicesId).toArray();
-	if (services.length === 0 && !(await hasServerRows(servicesId, online))) {
-		const now = new Date().toISOString();
-		const defs: { id?: string; data: Record<string, any> }[] = [
-			{
-				id: proxyId,
-				data: {
-					number: '1',
-					name: 'astro3d — прокси (шлюз)',
-					base_url: 'https://astro3d.ru/api/proxy',
-					method: 'POST',
-					auth_type: 'query',
-					auth_param: 'notify_key',
-					api_key: '',
-					headers: '{}',
-					proxy: '',
-					is_active: true,
-					description:
-						'Шлюз для внешних HTTP-API. Укажите его в поле «Прокси» другого сервиса, и запрос уйдёт с сервера astro3d.ru на нужный url — внешнему API не нужен CORS. Тело запроса к шлюзу: { notify_key, url, method, query, headers, body }. Авторизация — ключ доступа этого сервиса (заполните «Ключ доступа» значением NOTIFY_KEY сервера).'
-				}
-			},
-			{
-				id: notifyId,
-				data: {
-					number: '2',
-					name: 'astro3d — уведомления',
-					base_url: 'https://astro3d.ru/api/notify',
-					method: 'POST',
-					auth_type: 'query',
-					auth_param: 'notify_key',
-					api_key: '',
-					headers: '{}',
-					proxy: proxyId,
-					is_active: true,
-					description:
-						'Рассылка сообщений в Telegram, ВКонтакте и на E-mail. Вызывается автоматически действием «Выполнить» документа «Сообщение»: канал указывает на этот сервис в поле «Сервис уведомлений». Формат: POST JSON { message, channels: [{ type: "tg"|"vk"|"email", id }], file? }. Ключ доступа — notify_key шлюза (заполните в «Ключ доступа»). Идёт через прокси (поле «Прокси»).'
-				}
-			},
-			{
-				data: {
-					number: '3',
-					name: 'wttr.in — погода',
-					base_url: 'https://wttr.in/${city}?format=j1&lang=ru',
-					method: 'GET',
-					auth_type: 'none',
-					auth_param: '',
-					api_key: '',
-					headers: '{}',
-					proxy: '',
-					is_active: false,
-					description:
-						'Пример внешнего API без прокси (поле «Прокси» пустое — запрос идёт напрямую из браузера). Погода по городу через шаблон ${city}. Пример: apiCall(svc, { city: "Moscow" }).'
-				}
-			},
-			{
-				data: {
-					number: '4',
-					name: 'astro3d — натальная карта',
-					base_url: 'https://astro3d.ru/api/v1/natal?city=${city}&date=${date}&time=${time}',
-					method: 'GET',
-					auth_type: 'none',
-					auth_param: '',
-					api_key: '',
-					headers: '{}',
-					proxy: proxyId,
-					is_active: false,
-					description:
-						'Расчёт натальной карты. Параметры (в шаблоне url): city — город, date — YYYY-MM-DD, time — HH:MM (по умолчанию 12:00); hsys — система домов (по умолчанию P). Вместо city можно передать lat и lon. Ответ: JSON { meta, planets, houses, aspects }. Пример: apiCall(svc, { city: "Москва", date: "1990-05-15", time: "14:30" }).'
-				}
-			},
-			{
-				data: {
-					number: '5',
-					name: 'astro3d — синастрия',
-					base_url:
-						'https://astro3d.ru/api/v1/synastry?city1=${city1}&date1=${date1}&time1=${time1}&city2=${city2}&date2=${date2}&time2=${time2}',
-					method: 'GET',
-					auth_type: 'none',
-					auth_param: '',
-					api_key: '',
-					headers: '{}',
-					proxy: proxyId,
-					is_active: false,
-					description:
-						'Совместимость двух натальных карт. Параметры: city1, date1, time1 — первый человек, city2, date2, time2 — второй (даты YYYY-MM-DD, время HH:MM); hsys — система домов. Пример: apiCall(svc, { city1: "Москва", date1: "1990-05-15", time1: "12:00", city2: "Санкт-Петербург", date2: "1992-11-03", time2: "08:30" }).'
-				}
-			},
-			{
-				data: {
-					number: '6',
-					name: 'astro3d — периоды',
-					base_url:
-						'https://astro3d.ru/api/v1/period?start=${start}&end=${end}&step=${step}&city=${city}',
-					method: 'GET',
-					auth_type: 'none',
-					auth_param: '',
-					api_key: '',
-					headers: '{}',
-					proxy: proxyId,
-					is_active: false,
-					description:
-						'Расчёт астрологических периодов на интервале. Параметры: start и end — YYYY-MM-DD HH:MM (обязательны), step — шаг, city — город. Пример: apiCall(svc, { start: "2026-01-01 00:00", end: "2026-01-31 00:00", city: "Москва" }).'
-				}
-			},
-			{
-				data: {
-					number: '7',
-					name: 'astro3d — календарь',
-					base_url: 'https://astro3d.ru/api/v1/calendar?year=${year}&month=${month}&city=${city}',
-					method: 'GET',
-					auth_type: 'none',
-					auth_param: '',
-					api_key: '',
-					headers: '{}',
-					proxy: proxyId,
-					is_active: false,
-					description:
-						'Астрологический календарь событий на год или месяц. Параметры: year — год (по умолчанию текущий), month — месяц 1-12 (необязательный), city — город. Без month — весь год. Пример: apiCall(svc, { year: 2026, month: 8, city: "Москва" }).'
-				}
+	const now = new Date().toISOString();
+	const defs: { id?: string; data: Record<string, any> }[] = [
+		{
+			id: proxyId,
+			data: {
+				number: '1',
+				name: 'astro3d — прокси (шлюз)',
+				base_url: 'https://astro3d.ru/api/proxy',
+				method: 'POST',
+				auth_type: 'query',
+				auth_param: 'notify_key',
+				api_key: '',
+				headers: '{}',
+				proxy: '',
+				is_active: true,
+				description:
+					'Шлюз для внешних HTTP-API. Укажите его в поле «Прокси» другого сервиса, и запрос уйдёт с сервера astro3d.ru на нужный url — внешнему API не нужен CORS. Тело запроса к шлюзу: { notify_key, url, method, query, headers, body }. Авторизация — ключ доступа этого сервиса (заполните «Ключ доступа» значением NOTIFY_KEY сервера).'
 			}
-		];
+		},
+		{
+			id: notifyId,
+			data: {
+				number: '2',
+				name: 'astro3d — уведомления',
+				base_url: 'https://astro3d.ru/api/notify',
+				method: 'POST',
+				auth_type: 'query',
+				auth_param: 'notify_key',
+				api_key: '',
+				headers: '{}',
+				proxy: proxyId,
+				is_active: true,
+				description:
+					'Рассылка сообщений в Telegram, ВКонтакте и на E-mail. Вызывается автоматически действием «Выполнить» документа «Сообщение»: канал указывает на этот сервис в поле «Сервис уведомлений». Формат: POST JSON { message, channels: [{ type: "tg"|"vk"|"email", id }], file? }. Ключ доступа — notify_key шлюза (заполните в «Ключ доступа»). Идёт через прокси (поле «Прокси»).'
+			}
+		},
+		{
+			data: {
+				number: '3',
+				name: 'wttr.in — погода',
+				base_url: 'https://wttr.in/${city}?format=j1&lang=ru',
+				method: 'GET',
+				auth_type: 'none',
+				auth_param: '',
+				api_key: '',
+				headers: '{}',
+				proxy: '',
+				is_active: false,
+				description:
+					'Пример внешнего API без прокси (поле «Прокси» пустое — запрос идёт напрямую из браузера). Погода по городу через шаблон ${city}. Пример: apiCall(svc, { city: "Moscow" }).'
+			}
+		},
+		{
+			data: {
+				number: '4',
+				name: 'astro3d — натальная карта',
+				base_url: 'https://astro3d.ru/api/v1/natal?city=${city}&date=${date}&time=${time}',
+				method: 'GET',
+				auth_type: 'none',
+				auth_param: '',
+				api_key: '',
+				headers: '{}',
+				proxy: proxyId,
+				is_active: false,
+				description:
+					'Расчёт натальной карты. Параметры (в шаблоне url): city — город, date — YYYY-MM-DD, time — HH:MM (по умолчанию 12:00); hsys — система домов (по умолчанию P). Вместо city можно передать lat и lon. Ответ: JSON { meta, planets, houses, aspects }. Пример: apiCall(svc, { city: "Москва", date: "1990-05-15", time: "14:30" }).'
+			}
+		},
+		{
+			data: {
+				number: '5',
+				name: 'astro3d — синастрия',
+				base_url:
+					'https://astro3d.ru/api/v1/synastry?city1=${city1}&date1=${date1}&time1=${time1}&city2=${city2}&date2=${date2}&time2=${time2}',
+				method: 'GET',
+				auth_type: 'none',
+				auth_param: '',
+				api_key: '',
+				headers: '{}',
+				proxy: proxyId,
+				is_active: false,
+				description:
+					'Совместимость двух натальных карт. Параметры: city1, date1, time1 — первый человек, city2, date2, time2 — второй (даты YYYY-MM-DD, время HH:MM); hsys — система домов. Пример: apiCall(svc, { city1: "Москва", date1: "1990-05-15", time1: "12:00", city2: "Санкт-Петербург", date2: "1992-11-03", time2: "08:30" }).'
+			}
+		},
+		{
+			data: {
+				number: '6',
+				name: 'astro3d — периоды',
+				base_url:
+					'https://astro3d.ru/api/v1/period?start=${start}&end=${end}&step=${step}&city=${city}',
+				method: 'GET',
+				auth_type: 'none',
+				auth_param: '',
+				api_key: '',
+				headers: '{}',
+				proxy: proxyId,
+				is_active: false,
+				description:
+					'Расчёт астрологических периодов на интервале. Параметры: start и end — YYYY-MM-DD HH:MM (обязательны), step — шаг, city — город. Пример: apiCall(svc, { start: "2026-01-01 00:00", end: "2026-01-31 00:00", city: "Москва" }).'
+			}
+		},
+		{
+			data: {
+				number: '7',
+				name: 'astro3d — календарь',
+				base_url: 'https://astro3d.ru/api/v1/calendar?year=${year}&month=${month}&city=${city}',
+				method: 'GET',
+				auth_type: 'none',
+				auth_param: '',
+				api_key: '',
+				headers: '{}',
+				proxy: proxyId,
+				is_active: false,
+				description:
+					'Астрологический календарь событий на год или месяц. Параметры: year — год (по умолчанию текущий), month — месяц 1-12 (необязательный), city — город. Без month — весь год. Пример: apiCall(svc, { year: 2026, month: 8, city: "Москва" }).'
+			}
+		},
+		{
+			data: {
+				number: '8',
+				name: 'OpenStreetMap — геокодинг (Nominatim)',
+				base_url:
+					'https://nominatim.openstreetmap.org/search?q=${query}&format=jsonv2&accept-language=ru&limit=1',
+				method: 'GET',
+				auth_type: 'none',
+				auth_param: '',
+				api_key: '',
+				headers: '{}',
+				proxy: '',
+				is_active: true,
+				description:
+					'Координаты по наименованию: геокодинг OpenStreetMap (Nominatim). Параметр ${query} — наименование места, может быть на русском (URL-кодируется автоматически, accept-language=ru даёт русские названия). Ответ — JSON-массив мест; у первого результата координаты: res.data[0].lat и res.data[0].lon. Без прокси — прямой запрос из браузера (Nominatim разрешает CORS). Пример: apiCall(svc, { query: "Эрмитаж, Санкт-Петербург" }).'
+			}
+		}
+	];
+
+	if (services.length === 0 && !(await hasServerRows(servicesId, online))) {
 		const rows: LocalRecord[] = defs.map((def) => ({
 			id: def.id ?? crypto.randomUUID(),
 			table_id: servicesId,
@@ -767,6 +806,27 @@ async function seedDefaults(
 			updated_at: now
 		}));
 		for (const row of rows) await seedRecord(row, online);
+	} else {
+		// Каталог уже заполнен (существующая установка): новые дефолтные записи
+		// (например, OpenStreetMap) досеиваем по name — только отсутствующие,
+		// существующие (в т.ч. отредактированные вручную) не трогаем.
+		for (const def of defs) {
+			const name = def.data.name;
+			if (!name || (await serviceExists(servicesId, name, online))) continue;
+			await seedRecord(
+				{
+					id: def.id ?? crypto.randomUUID(),
+					table_id: servicesId,
+					status: 'draft',
+					is_folder: false,
+					parent_id: null,
+					data: def.data,
+					is_dirty: 1,
+					updated_at: now
+				},
+				online
+			);
+		}
 	}
 }
 

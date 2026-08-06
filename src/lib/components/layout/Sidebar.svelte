@@ -5,6 +5,12 @@
 	import { syncService } from '$lib/services/sync';
 	import { liveQuery } from 'dexie';
 	import { tableTypeList, deleteTableTypeFromDB, createTableTypeFromBase } from '$lib/table-types';
+	import {
+		APP_SETTINGS_TABLE,
+		NAV_ORDER_KEY,
+		clearNavOrder as resetPersistedNavOrder,
+		saveNavOrder as persistNavOrder
+	} from '$lib/state/settings';
 
 	// Порядок встроенных групп в сайдбаре; кастомные типы идут после
 	const preferredTypeOrder = ['directory', 'document', 'register', 'constant', 'system'];
@@ -69,6 +75,54 @@
 	// но её записи ведут на исходные объекты (см. DynamicList.openRecord).
 	let historyTable = $derived(tables.find((t) => t.name === 'history') ?? null);
 
+	// Меню «Открыть ссылку»: команда раскрывает поле ввода, Enter — открыть,
+	// Escape — свернуть. Принимает полный URL, hash или голый id записи.
+	let openLinkExpanded = $state(false);
+	let openLinkInput = $state('');
+	let openLinkError = $state('');
+
+	// Нормализация: полный URL/hash парсит сам parseHash (всё до # отрезается),
+	// голый id без '#' и '/' превращаем в ссылку на запись.
+	function normalizeOpenLink(input: string): string {
+		const text = input.trim();
+		if (!text) return '';
+		if (text.includes('#') || text.includes('/')) return text;
+		return `#/r/${text}`;
+	}
+
+	async function handleOpenLink() {
+		const href = normalizeOpenLink(openLinkInput);
+		if (!href) {
+			openLinkError = 'Введите ссылку или id записи';
+			return;
+		}
+		const ok = await workspace.openFromLink(href);
+		if (ok) {
+			openLinkExpanded = false;
+			openLinkInput = '';
+			openLinkError = '';
+		} else {
+			openLinkError = 'Объект не найден. Проверьте ссылку.';
+		}
+	}
+
+	function handleOpenLinkKeydown(e: KeyboardEvent) {
+		if (e.key === 'Enter') {
+			e.preventDefault();
+			handleOpenLink();
+		} else if (e.key === 'Escape') {
+			openLinkExpanded = false;
+			openLinkInput = '';
+			openLinkError = '';
+		}
+	}
+
+	function collapseOpenLink() {
+		openLinkExpanded = false;
+		openLinkInput = '';
+		openLinkError = '';
+	}
+
 	// Те же группы, но без скрытых таблиц (для основного режима)
 	let mainModeTablesByType = $derived.by(() => {
 		const map: Record<string, LocalTable[]> = {};
@@ -99,6 +153,139 @@
 		});
 		return map;
 	});
+
+	// ---- Настраиваемый порядок меню основного режима ----
+	// Порядок групп типов и таблиц внутри них хранится в системной таблице
+	// app_settings (запись с ключом main_nav_order), редактируется в конструкторе.
+	let navOrder = $state<{ typeOrder: string[]; tableOrder: Record<string, string[]> }>({
+		typeOrder: [],
+		tableOrder: {}
+	});
+
+	$effect(() => {
+		const observable = liveQuery(async () => {
+			const table = await db.meta_tables.where('name').equals(APP_SETTINGS_TABLE).first();
+			if (!table) return null;
+			const rows = await db.data_records.where('table_id').equals(table.id).toArray();
+			return rows.find((r) => r.data?.key === NAV_ORDER_KEY) ?? null;
+		});
+
+		const subscription = observable.subscribe({
+			next: (rec) => {
+				navOrder = {
+					typeOrder: Array.isArray(rec?.data?.typeOrder) ? rec.data.typeOrder : [],
+					tableOrder:
+						rec?.data?.tableOrder && typeof rec.data.tableOrder === 'object'
+							? rec.data.tableOrder
+							: {}
+				};
+			},
+			error: (err) => console.error('Ошибка чтения настроек меню:', err)
+		});
+
+		return () => subscription.unsubscribe();
+	});
+
+	let tablesById = $derived(new Map(tables.map((t) => [t.id, t])));
+
+	// Порядок групп: настроенные типы — в заданном порядке, остальные — после них
+	// в стандартном порядке (preferredTypeOrder, кастомные — по алфавиту).
+	let orderedTypeList = $derived.by(() => {
+		const types = [...typeList];
+		const navIdx = new Map(navOrder.typeOrder.map((t, i) => [t, i]));
+		types.sort((a, b) => {
+			const ia = navIdx.has(a.type) ? navIdx.get(a.type)! : Number.MAX_SAFE_INTEGER;
+			const ib = navIdx.has(b.type) ? navIdx.get(b.type)! : Number.MAX_SAFE_INTEGER;
+			if (ia !== ib) return ia - ib;
+			const pa = preferredTypeOrder.indexOf(a.type);
+			const pb = preferredTypeOrder.indexOf(b.type);
+			return (pa === -1 ? 99 : pa) - (pb === -1 ? 99 : pb) || a.label.localeCompare(b.label);
+		});
+		return types;
+	});
+
+	// В конструкторе дерево остаётся в исходном порядке, в основном — в настроенном
+	let displayTypeList = $derived(workspace.mode === 'constructor' ? typeList : orderedTypeList);
+
+	// Таблицы группы основного режима: из navOrder.tableOrder[type]; не настроенные
+	// (новые) — в конец группы по имени.
+	function orderedTablesFor(type: string): LocalTable[] {
+		const list = mainModeTablesByType[type] ?? [];
+		const order = navOrder.tableOrder[type] ?? [];
+		if (order.length === 0) return list;
+		const byId = new Map(list.map((t) => [t.id, t]));
+		const ordered = order.map((id) => byId.get(id)).filter((t): t is LocalTable => !!t);
+		const rest = list
+			.filter((t) => !order.includes(t.id))
+			.sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''));
+		return [...ordered, ...rest];
+	}
+
+	// Редактирование порядка в конструкторе: правки копятся в черновиках,
+	// «Сохранить» пишет их в app_settings и запускает синк.
+	let editingNavOrder = $state(false);
+	let draftTypeOrder = $state<string[]>([]);
+	let draftTableOrder = $state<Record<string, string[]>>({});
+
+	function toggleEditNavOrder() {
+		if (editingNavOrder) {
+			cancelNavOrder();
+			return;
+		}
+		draftTypeOrder = orderedTypeList.map((t) => t.type);
+		draftTableOrder = {};
+		for (const t of orderedTypeList) {
+			const configured = new Set(navOrder.tableOrder[t.type] ?? []);
+			const ordered = (navOrder.tableOrder[t.type] ?? []).filter((id) => tablesById.has(id));
+			const rest = (mainModeTablesByType[t.type] ?? [])
+				.filter((tbl) => !configured.has(tbl.id))
+				.map((tbl) => tbl.id);
+			draftTableOrder[t.type] = [...ordered, ...rest];
+		}
+		editingNavOrder = true;
+	}
+
+	function moveType(index: number, dir: -1 | 1) {
+		const j = index + dir;
+		if (j < 0 || j >= draftTypeOrder.length) return;
+		const arr = [...draftTypeOrder];
+		[arr[index], arr[j]] = [arr[j], arr[index]];
+		draftTypeOrder = arr;
+	}
+
+	function moveTable(type: string, index: number, dir: -1 | 1) {
+		const current = draftTableOrder[type] ?? [];
+		const j = index + dir;
+		if (j < 0 || j >= current.length) return;
+		const arr = [...current];
+		[arr[index], arr[j]] = [arr[j], arr[index]];
+		draftTableOrder = { ...draftTableOrder, [type]: arr };
+	}
+
+	async function saveNavOrder() {
+		try {
+			await persistNavOrder({ typeOrder: draftTypeOrder, tableOrder: draftTableOrder });
+			editingNavOrder = false;
+			await syncService.runFullSync();
+		} catch (e: any) {
+			alert(`Ошибка сохранения порядка меню: ${e?.message ?? e}`);
+		}
+	}
+
+	async function resetNavOrder() {
+		if (!confirm('Сбросить порядок меню к стандартному?')) return;
+		await resetPersistedNavOrder();
+		editingNavOrder = false;
+		draftTypeOrder = [];
+		draftTableOrder = {};
+		await syncService.runFullSync();
+	}
+
+	function cancelNavOrder() {
+		editingNavOrder = false;
+		draftTypeOrder = [];
+		draftTableOrder = {};
+	}
 
 	// Раскрытые строки дерева таблиц (в конструкторе)
 	let expandedTables = $state<Record<string, boolean>>({});
@@ -310,6 +497,43 @@
 			<div class="p-4 text-gray-500 text-sm">Загрузка конфигурации...</div>
 		{:else}
 			<nav class="sidebar-nav">
+				{#if workspace.mode === 'main'}
+					<div class="menu-section">
+						<div class="group-header-row">
+							<span class="group-title">Меню</span>
+						</div>
+						<button
+							class="menu-command-btn"
+							class:active={openLinkExpanded}
+							onclick={() => (openLinkExpanded = !openLinkExpanded)}
+							title="Открыть объект по ссылке в новой вкладке"
+						>
+							🔗 Открыть ссылку…
+						</button>
+						{#if openLinkExpanded}
+							<div class="open-link-form">
+								<input
+									type="text"
+									bind:value={openLinkInput}
+									onkeydown={handleOpenLinkKeydown}
+									placeholder="#/r/…, полная ссылка или id"
+									class="create-table-input"
+									class:input-error={!!openLinkError}
+									use:autofocusInput
+								/>
+								{#if openLinkError}
+									<div class="open-link-error">{openLinkError}</div>
+								{/if}
+								<div class="open-link-actions">
+									<button onclick={handleOpenLink} class="type-btn type-btn-primary">Открыть</button
+									>
+									<button onclick={collapseOpenLink} class="type-btn">Отмена</button>
+								</div>
+							</div>
+						{/if}
+					</div>
+				{/if}
+
 				{#if workspace.mode === 'main' && historyTable}
 					<div class="history-section">
 						<div class="group-header-row">
@@ -334,6 +558,80 @@
 				{/if}
 
 				{#if workspace.mode === 'constructor'}
+					<div class="navorder-section">
+						<div class="group-header-row">
+							<span class="group-title">🔀 Порядок меню (основной режим)</span>
+							{#if !editingNavOrder}
+								<button
+									class="group-add-btn"
+									onclick={toggleEditNavOrder}
+									title="Настроить порядок типов и таблиц"
+								>
+									✎
+								</button>
+							{/if}
+						</div>
+
+						{#if editingNavOrder}
+							{#each draftTypeOrder as typeName, tIndex}
+								{@const typeDef = orderedTypeList.find((t) => t.type === typeName)}
+								{@const tablesInType = draftTableOrder[typeName] ?? []}
+								{#if typeDef}
+									<div class="navorder-type-row">
+										<div class="navorder-type-title">
+											<span class="navorder-group-title"
+												>{groupTitle(typeDef.type, typeDef.label)}</span
+											>
+											<div class="navorder-move">
+												<button
+													class="navorder-arrow"
+													onclick={() => moveType(tIndex, -1)}
+													disabled={tIndex === 0}
+													title="Группу выше">▲</button
+												>
+												<button
+													class="navorder-arrow"
+													onclick={() => moveType(tIndex, 1)}
+													disabled={tIndex === draftTypeOrder.length - 1}
+													title="Группу ниже">▼</button
+												>
+											</div>
+										</div>
+										<ul class="navorder-tables">
+											{#each tablesInType as tableId, tIdx}
+												{@const table = tablesById.get(tableId)}
+												{#if table}
+													<li class="navorder-table-row">
+														<span class="navorder-table-title">{table.title}</span>
+														<div class="navorder-move">
+															<button
+																class="navorder-arrow"
+																onclick={() => moveTable(typeName, tIdx, -1)}
+																disabled={tIdx === 0}
+																title="Выше">▲</button
+															>
+															<button
+																class="navorder-arrow"
+																onclick={() => moveTable(typeName, tIdx, 1)}
+																disabled={tIdx === tablesInType.length - 1}
+																title="Ниже">▼</button
+															>
+														</div>
+													</li>
+												{/if}
+											{/each}
+										</ul>
+									</div>
+								{/if}
+							{/each}
+							<div class="navorder-actions">
+								<button onclick={saveNavOrder} class="type-btn type-btn-primary">Сохранить</button>
+								<button onclick={resetNavOrder} class="type-btn">Сброс</button>
+								<button onclick={cancelNavOrder} class="type-btn">Отмена</button>
+							</div>
+						{/if}
+					</div>
+
 					<div class="types-section">
 						<div class="group-header-row">
 							<span class="group-title">🗂 Типы таблиц</span>
@@ -404,7 +702,7 @@
 					</div>
 				{/if}
 
-				{#each typeList as typeDef}
+				{#each displayTypeList as typeDef}
 					{#if typeDef.type !== 'tabular' && (workspace.mode === 'constructor' || (mainModeTablesByType[typeDef.type]?.length ?? 0) > 0)}
 						<div class="nav-group">
 							<div class="group-header-row">
@@ -492,7 +790,7 @@
 											</li>
 										{/each}
 									{:else}
-										{#each mainModeTablesByType[typeDef.type] ?? [] as table}
+										{#each orderedTablesFor(typeDef.type) as table}
 											<li>
 												<button
 													onclick={() => workspace.openList(table.id, table.title)}
@@ -567,6 +865,80 @@
 		margin-bottom: 1.25rem;
 		padding-bottom: 0.75rem;
 		border-bottom: 1px solid #e5e7eb;
+	}
+	.navorder-section {
+		margin-bottom: 1.25rem;
+		padding-bottom: 0.75rem;
+		border-bottom: 1px solid #e5e7eb;
+	}
+	.navorder-type-row {
+		margin-bottom: 0.5rem;
+	}
+	.navorder-type-title {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 4px;
+		padding: 2px 0.25rem;
+	}
+	.navorder-group-title {
+		font-size: 0.75rem;
+		font-weight: 700;
+		text-transform: uppercase;
+		color: #6b7280;
+	}
+	.navorder-tables {
+		list-style: none;
+		padding: 0;
+		margin: 0;
+	}
+	.navorder-table-row {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 4px;
+		padding: 2px 0.25rem 2px 0.75rem;
+		font-size: 0.8rem;
+		color: #4b5563;
+	}
+	.navorder-table-row:hover {
+		background-color: #e5e7eb;
+		border-radius: 0.25rem;
+	}
+	.navorder-table-title {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		flex: 1;
+	}
+	.navorder-move {
+		display: flex;
+		gap: 2px;
+		flex-shrink: 0;
+	}
+	.navorder-arrow {
+		background: none;
+		border: 1px solid #cbd5e1;
+		border-radius: 0.25rem;
+		color: #475569;
+		font-size: 0.6rem;
+		width: 20px;
+		height: 20px;
+		cursor: pointer;
+		line-height: 1;
+	}
+	.navorder-arrow:hover:not(:disabled) {
+		background-color: #f1f5f9;
+		color: #1f2937;
+	}
+	.navorder-arrow:disabled {
+		opacity: 0.4;
+		cursor: default;
+	}
+	.navorder-actions {
+		display: flex;
+		gap: 6px;
+		margin-top: 0.5rem;
 	}
 	.create-type-form {
 		display: flex;
@@ -794,6 +1166,51 @@
 		margin-bottom: 1.25rem;
 		padding-bottom: 0.75rem;
 		border-bottom: 1px solid #e5e7eb;
+	}
+	.menu-section {
+		margin-bottom: 1.25rem;
+		padding-bottom: 0.75rem;
+		border-bottom: 1px solid #e5e7eb;
+	}
+	.menu-command-btn {
+		width: 100%;
+		display: flex;
+		align-items: center;
+		text-align: left;
+		background: none;
+		border: none;
+		cursor: pointer;
+		padding: 0.5rem 0.75rem;
+		font-size: 0.9rem;
+		color: #4b5563;
+		border-radius: 0.375rem;
+		transition: background-color 0.2s;
+	}
+	.menu-command-btn:hover {
+		background-color: #e5e7eb;
+		color: #1f2937;
+	}
+	.menu-command-btn.active {
+		background-color: #e0e7ff;
+		color: #4f46e5;
+		font-weight: 500;
+	}
+	.open-link-form {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+		padding: 0 0.25rem 0.5rem;
+	}
+	.open-link-actions {
+		display: flex;
+		gap: 6px;
+	}
+	.open-link-error {
+		font-size: 0.75rem;
+		color: #dc2626;
+	}
+	.input-error {
+		border-color: #ef4444;
 	}
 	.history-open-btn {
 		flex: 1;

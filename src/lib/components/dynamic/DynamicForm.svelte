@@ -297,6 +297,15 @@
 			isConstant ? tableTitle : `${tableTitle} №${recordData.number}`
 		);
 		if (targetStatus !== recordStatus) recordStatus = targetStatus as any;
+
+		// Журнал изменений: факт сохранения (в т.ч. проведение/пометка на удаление)
+		workspace.recordHistory(
+			tableId,
+			isConstant ? tableTitle : `${tableTitle} №${recordData.number}`,
+			buildRecordUrl(recordId),
+			'save',
+			targetStatus
+		);
 	}
 
 	async function handleAction(actionId: string) {

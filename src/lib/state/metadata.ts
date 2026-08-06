@@ -3,6 +3,7 @@ import { db, type LocalColumn } from '$lib/db/indexeddb';
 import { getTableType } from '$lib/table-types';
 import { ensureNotificationTables } from '$lib/state/notifications';
 import { ensureSchedulerTables } from '$lib/state/scheduler';
+import { ensureSettingsTable } from '$lib/state/settings';
 
 // Имя системной таблицы-истории действий. Уникально в meta_tables, используется
 // для поиска таблицы и в recordHistory/clearHistory/сайдбаре.
@@ -15,7 +16,14 @@ export const HISTORY_TABLE_NAME = 'history';
 const HISTORY_COLUMNS: Omit<LocalColumn, 'id' | 'table_id'>[] = [
 	{ name: 'object_title', title: 'Объект', type: 'string', sort_order: 1, is_visible: true },
 	{ name: 'opened_at', title: 'Когда', type: 'date', sort_order: 2, is_visible: true },
-	{ name: 'link', title: 'Ссылка', type: 'string', sort_order: 3, is_visible: false }
+	{ name: 'link', title: 'Ссылка', type: 'string', sort_order: 3, is_visible: false },
+	{
+		name: 'event',
+		title: 'Событие',
+		type: 'string',
+		sort_order: 4,
+		is_visible: true
+	}
 ];
 
 function slugify(text: string): string {
@@ -129,20 +137,27 @@ class MetadataManager {
 		// Документ «Расписание» для периодической рассылки (например, погоды).
 		// Исполняет Go-сервер 24/7; здесь создаются только метаданные таблиц.
 		await ensureSchedulerTables();
+
+		// Таблица настроек приложения (порядок меню основного режима и т.п.).
+		await ensureSettingsTable();
 	}
 
-	// Колонки истории: проверяет и создаёт на сервере (если онлайн) и локально.
+	// Колонки истории: проверяет и создаёт недостающие на сервере (если онлайн)
+	// и локально. Идемпотентно — добавляются только отсутствующие по name, поэтому
+	// новые колонки (например, «Событие») появляются и у существующей таблицы.
 	private async ensureHistoryColumns(tableId: string, online: boolean): Promise<void> {
 		if (online) {
 			try {
 				const { data: existingCols } = await supabase
 					.from('meta_columns')
-					.select('id')
+					.select('name')
 					.eq('table_id', tableId);
-				if (!existingCols || existingCols.length === 0) {
+				const existingNames = new Set((existingCols ?? []).map((c) => c.name));
+				const missing = HISTORY_COLUMNS.filter((c) => !existingNames.has(c.name));
+				if (missing.length > 0) {
 					await supabase
 						.from('meta_columns')
-						.insert(HISTORY_COLUMNS.map((c) => ({ table_id: tableId, ...c })));
+						.insert(missing.map((c) => ({ table_id: tableId, ...c })));
 				}
 			} catch {
 				// сервер недоступен — достаточно локальной копии
@@ -150,9 +165,11 @@ class MetadataManager {
 		}
 
 		const localCols = await db.meta_columns.where('table_id').equals(tableId).toArray();
-		if (localCols.length === 0) {
+		const localNames = new Set(localCols.map((c) => c.name));
+		const missingLocal = HISTORY_COLUMNS.filter((c) => !localNames.has(c.name));
+		if (missingLocal.length > 0) {
 			await db.meta_columns.bulkPut(
-				HISTORY_COLUMNS.map((c) => ({ id: crypto.randomUUID(), table_id: tableId, ...c }))
+				missingLocal.map((c) => ({ id: crypto.randomUUID(), table_id: tableId, ...c }))
 			);
 		}
 	}

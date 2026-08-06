@@ -100,9 +100,31 @@
 				const d = node.data ?? {};
 				const name = String(d.name || d.number || node.id);
 				const refs: Ref[] = [];
-				const type = String(d.node_type || '');
-				const np =
+
+				// Элемент каталога (flow_elements) + переопределения узла: ссылки
+				// строим по эффективному типу/сервису/параметрам (элемент + узел).
+				let eType = String(d.node_type || '');
+				let eService = d.service ? String(d.service) : '';
+				let np =
 					d.params && typeof d.params === 'object' && !Array.isArray(d.params) ? d.params : {};
+				if (d.element) {
+					const el = await db.data_records.get(String(d.element));
+					if (el) {
+						const ed = el.data ?? {};
+						pushRef(refs, {
+							label: `Элемент → ${ed.name || '…'}`,
+							href: buildRecordUrl(el.id)
+						});
+						if (!eType) eType = String(ed.element_type || '');
+						if (!eService && ed.service) eService = String(ed.service);
+						const elParams =
+							ed.params && typeof ed.params === 'object' && !Array.isArray(ed.params)
+								? ed.params
+								: {};
+						np = { ...elParams, ...np };
+					}
+				}
+				const type = eType;
 
 				if (type === 'constant' && np.name) {
 					const constName = String(np.name);
@@ -120,8 +142,8 @@
 						pushRef(refs, { label: `Константа «${constName}» (не найдена)` });
 					}
 				}
-				if (type === 'api' && d.service) {
-					const r = await recordRef(String(d.service));
+				if (type === 'api' && eService) {
+					const r = await recordRef(eService);
 					pushRef(refs, { label: `Сервис API → ${r.label}`, href: r.href });
 				}
 				if (['find', 'create', 'run'].includes(type) && np.table) {

@@ -6,10 +6,14 @@ import { API_SERVICES_TABLE, ensureColumns, ensureTable } from '$lib/state/notif
 // одна схема; узлы и связи — табличные части этой записи, поэтому сценарий
 // самодостаточен (копируется/удаляется вместе с графом).
 //
-//   «Узлы»   (flow_nodes): name, node_type (start/action/condition/api),
-//            params (jsonb), code (текст узла), service (ссылка на api_services)
+//   «Узлы»   (flow_nodes): name, element (ссылка на каталог flow_elements),
+//            node_type (start/action/condition/api), params (jsonb — переопределения),
+//            code (текст узла), service (ссылка на api_services)
 //   «Связи»  (flow_links): from_node, to_node (Ссылка на строку ТЧ «Узлы»),
 //            role (flow | parallel | input), label
+//   «Элементы сценария» (flow_elements): каталог переиспользуемых узлов
+//            (тип + сервис + параметры/код). Узел ссылается на элемент и может
+//            переопределять его параметры/код/тип — движок сливает их.
 //
 // Исполнение — кнопка «▶️ Выполнить»: движок flowRunner.ts запускается либо
 // через config.runCode (дефолт), либо напрямую по типу таблицы (runRecordAction).
@@ -18,6 +22,7 @@ import { API_SERVICES_TABLE, ensureColumns, ensureTable } from '$lib/state/notif
 export const FLOW_TABLE = 'flow_scenarios';
 export const FLOW_NODES_TABLE = 'flow_nodes';
 export const FLOW_LINKS_TABLE = 'flow_links';
+export const FLOW_ELEMENTS_TABLE = 'flow_elements';
 
 // Код действия по умолчанию: вызывает движок сценария. Доступен пользователю
 // в конфигураторе как обычный runCode, но тип 'flow' выполняется и без него.
@@ -45,9 +50,22 @@ function scenarioColumns(): Omit<LocalColumn, 'id' | 'table_id'>[] {
 	];
 }
 
-function nodeColumns(servicesId: string): Omit<LocalColumn, 'id' | 'table_id'>[] {
+// Колонки узла: собственные параметры/код — переопределения поверх выбранного
+// элемента каталога; поля, которых нет в узле, берутся из элемента.
+function nodeColumns(
+	servicesId: string,
+	elementsId: string
+): Omit<LocalColumn, 'id' | 'table_id'>[] {
 	return [
 		{ name: 'name', title: 'Наименование', type: 'string', sort_order: 10, is_visible: true },
+		{
+			name: 'element',
+			title: 'Элемент',
+			type: 'link',
+			sort_order: 15,
+			is_visible: true,
+			related_table_id: elementsId
+		},
 		{
 			name: 'node_type',
 			title: 'Тип узла',
@@ -65,6 +83,33 @@ function nodeColumns(servicesId: string): Omit<LocalColumn, 'id' | 'table_id'>[]
 		},
 		{ name: 'params', title: 'Параметры (JSON)', type: 'jsonb', sort_order: 40, is_visible: true },
 		{ name: 'code', title: 'Код узла', type: 'textarea', sort_order: 50, is_visible: false }
+	];
+}
+
+// Каталог переиспользуемых элементов сценария: запись = готовый узел
+// (тип + сервис + параметры/код). Сценарии ссылаются на элементы и могут
+// переопределять параметры и код на уровне узла.
+function elementColumns(servicesId: string): Omit<LocalColumn, 'id' | 'table_id'>[] {
+	return [
+		{ name: 'name', title: 'Наименование', type: 'string', sort_order: 10, is_visible: true },
+		{
+			name: 'element_type',
+			title: 'Тип',
+			type: 'select',
+			sort_order: 20,
+			is_visible: true
+		},
+		{
+			name: 'service',
+			title: 'Сервис API',
+			type: 'link',
+			sort_order: 30,
+			is_visible: true,
+			related_table_id: servicesId
+		},
+		{ name: 'params', title: 'Параметры (JSON)', type: 'jsonb', sort_order: 40, is_visible: true },
+		{ name: 'code', title: 'Код', type: 'textarea', sort_order: 50, is_visible: false },
+		{ name: 'description', title: 'Описание', type: 'textarea', sort_order: 60, is_visible: false }
 	];
 }
 
@@ -125,6 +170,14 @@ export async function ensureFlowTables(): Promise<void> {
 
 	const servicesId = (await db.meta_tables.where('name').equals(API_SERVICES_TABLE).first())?.id;
 
+	// Каталог переиспользуемых элементов сценария (тип + сервис + параметры/код).
+	const elementsId = await ensureTable(FLOW_ELEMENTS_TABLE, 'Элементы сценария', 'directory', {
+		features: { create: true, save: true, copy: true, delete: true, run: false }
+	});
+	if (elementsId) {
+		await ensureColumns(elementsId, elementColumns(servicesId ?? ''), online);
+	}
+
 	const scenarioId = await ensureTable(FLOW_TABLE, 'Сценарии', 'flow', {
 		features: { run: true },
 		runCode: FLOW_RUN_CODE
@@ -135,7 +188,7 @@ export async function ensureFlowTables(): Promise<void> {
 	// ТЧ «Узлы»: строки = узлы графа.
 	const nodesId = await ensureTable(FLOW_NODES_TABLE, 'Узлы', 'tabular', {}, scenarioId);
 	if (nodesId) {
-		await ensureColumns(nodesId, nodeColumns(servicesId ?? ''), online);
+		await ensureColumns(nodesId, nodeColumns(servicesId ?? '', elementsId ?? ''), online);
 		// Старые установки: колонка node_type была строкой — переводим в «Выбор из списка»
 		await upgradeNodeTypeColumn(nodesId, online);
 	}
@@ -284,9 +337,96 @@ async function seedScenario(
 	}
 }
 
+// Каталог элементов примера (flow_elements): идемпотентно по name. Узел сценария
+// ссылается на элемент (колонка element) и может переопределять параметры/код.
+async function seedFlowElements(online: boolean, wttrId: string): Promise<Map<string, string>> {
+	const table = await db.meta_tables.where('name').equals(FLOW_ELEMENTS_TABLE).first();
+	if (!table) return new Map();
+	const nameToId = new Map<string, string>();
+
+	const defs: Array<Record<string, any>> = [
+		{ name: 'Константа города', element_type: 'constant', params: { name: 'city' } },
+		{ name: 'Извлечь город', element_type: 'get', params: { path: 'city' } },
+		{
+			name: 'Погода (wttr.in)',
+			element_type: 'api',
+			service: wttrId,
+			params: { city: '${input}', format: 'j1', lang: 'ru' }
+		},
+		{
+			name: 'Текст прогноза',
+			element_type: 'template',
+			params: {
+				template:
+					'Погода в городе ${nearest_area.0.areaName.0.value}: ${current_condition.0.temp_C}°C, ${current_condition.0.weatherDesc.0.value}'
+			}
+		},
+		{
+			name: 'Найти канал контрагента',
+			element_type: 'find',
+			params: { table: 'contragent_contacts', where: { record_id: '${kontragent}' } }
+		},
+		{
+			name: 'Создать сообщение',
+			element_type: 'create',
+			params: {
+				table: 'notify_messages',
+				data: { subject: 'Прогноз погоды', message: '${Текст прогноза}' },
+				lines: {
+					notify_message_channels: [{ kontragent: '${kontragent}', channel: '${channel}' }]
+				}
+			}
+		},
+		{
+			name: 'Отправить сообщение',
+			element_type: 'run',
+			params: { table: 'notify_messages', record: '${id}' }
+		}
+	];
+
+	for (const def of defs) {
+		const existing = await db.data_records
+			.where('table_id')
+			.equals(table.id)
+			.filter((r) => r.data?.name === def.name)
+			.first();
+		if (existing) {
+			nameToId.set(def.name, existing.id);
+			continue;
+		}
+		const record: LocalRecord = {
+			id: crypto.randomUUID(),
+			table_id: table.id,
+			status: 'draft',
+			is_folder: false,
+			parent_id: null,
+			data: {
+				name: def.name,
+				element_type: def.element_type,
+				service: def.service ?? '',
+				params: def.params ?? {},
+				code: '',
+				description: def.description ?? ''
+			},
+			is_dirty: 1,
+			updated_at: new Date().toISOString()
+		};
+		await db.data_records.put(record);
+		if (online) {
+			try {
+				await supabase.from('data_records').upsert(record);
+			} catch {
+				// уедет при ближайшем синке
+			}
+		}
+		nameToId.set(def.name, record.id);
+	}
+	return nameToId;
+}
+
 // Сид-пример сценария ПОСЛЕ синхронизации: вызывается из runFullSync сразу после
 // seedApiQueryDefaults — к этому моменту в кэше есть каталог «Сервисы API» (wttr.in)
-// и константы.
+// и константы. Узлы примера ссылаются на записи каталога «Элементы сценария».
 export async function seedFlowExample(): Promise<void> {
 	const online = typeof navigator === 'undefined' || navigator.onLine;
 
@@ -294,10 +434,13 @@ export async function seedFlowExample(): Promise<void> {
 	const nodesTable = await db.meta_tables.where('name').equals(FLOW_NODES_TABLE).first();
 	const linksTable = await db.meta_tables.where('name').equals(FLOW_LINKS_TABLE).first();
 	if (!scenarioTable || !nodesTable || !linksTable) return;
-	if (await flowExampleExists(scenarioTable.id, online)) return;
 
-	// Сервис погоды (wttr.in) для узла «Погода»
+	// Каталог элементов примера сидим всегда (идемпотентно по name), даже если сам
+	// сценарий уже существует — элементы нужны для редактирования и переиспользования.
 	const wttr = await db.data_records.filter((r) => r.data?.name === 'wttr.in — погода').first();
+	const elements = wttr ? await seedFlowElements(online, wttr.id) : new Map<string, string>();
+
+	if (await flowExampleExists(scenarioTable.id, online)) return;
 	if (!wttr) {
 		console.warn('Сид-пример сценария: не найден сервис wttr.in, пример не создан.');
 		return;
@@ -305,66 +448,23 @@ export async function seedFlowExample(): Promise<void> {
 
 	await ensureCityConstant(online);
 
+	// Узлы ссылаются на записи каталога (колонка element).
+	const el = (name: string): string => elements.get(name) ?? '';
+
 	const scenarioId = crypto.randomUUID();
 	const KONTRAGENT = '0bc5fc65-5db6-48c9-9810-fb52597356c4';
 
 	// Узлы. Имена узлов — ключи контекста: на результат узла «Текст прогноза»
-	// ссылается узел «Создать сообщение» через ${Текст прогноза}.
+	// ссылается узел «Создать сообщение» через ${Текст прогноза}. Конфиг живёт в
+	// элементах каталога; здесь — только ссылки (параметры/код можно переопределить).
 	const nodes = [
-		{
-			data: { name: 'Константа города', node_type: 'constant', params: { name: 'city' }, code: '' }
-		},
-		{ data: { name: 'Извлечь город', node_type: 'get', params: { path: 'city' }, code: '' } },
-		{
-			data: {
-				name: 'Погода',
-				node_type: 'api',
-				service: wttr.id,
-				params: { city: '${input}', format: 'j1', lang: 'ru' },
-				code: ''
-			}
-		},
-		{
-			data: {
-				name: 'Текст прогноза',
-				node_type: 'template',
-				params: {
-					template:
-						'Погода в городе ${nearest_area.0.areaName.0.value}: ${current_condition.0.temp_C}°C, ${current_condition.0.weatherDesc.0.value}'
-				},
-				code: ''
-			}
-		},
-		{
-			data: {
-				name: 'Канал контрагента',
-				node_type: 'find',
-				params: { table: 'contragent_contacts', where: { record_id: '${kontragent}' } },
-				code: ''
-			}
-		},
-		{
-			data: {
-				name: 'Создать сообщение',
-				node_type: 'create',
-				params: {
-					table: 'notify_messages',
-					data: { subject: 'Прогноз погоды', message: '${Текст прогноза}' },
-					lines: {
-						notify_message_channels: [{ kontragent: '${kontragent}', channel: '${channel}' }]
-					}
-				},
-				code: ''
-			}
-		},
-		{
-			data: {
-				name: 'Отправить',
-				node_type: 'run',
-				params: { table: 'notify_messages', record: '${id}' },
-				code: ''
-			}
-		}
+		{ data: { name: 'Константа города', element: el('Константа города'), params: {} } },
+		{ data: { name: 'Извлечь город', element: el('Извлечь город'), params: {} } },
+		{ data: { name: 'Погода', element: el('Погода (wttr.in)'), params: {} } },
+		{ data: { name: 'Текст прогноза', element: el('Текст прогноза'), params: {} } },
+		{ data: { name: 'Канал контрагента', element: el('Найти канал контрагента'), params: {} } },
+		{ data: { name: 'Создать сообщение', element: el('Создать сообщение'), params: {} } },
+		{ data: { name: 'Отправить', element: el('Отправить сообщение'), params: {} } }
 	];
 
 	// Связи: последовательные рёбра; «Канал контрагента» не зависит от текста,

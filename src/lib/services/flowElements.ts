@@ -33,12 +33,16 @@ export function flowElementLabel(type: string): string {
 	return FLOW_ELEMENTS.find((e) => e.type === type)?.label ?? type;
 }
 
-// Варианты выбора для колонки node_type ТЧ «Узлы» (тип поля «Выбор из списка»).
+// Варианты выбора для колонок «Тип»: в ТЧ «Узлы» — колонка node_type,
+// в каталоге «Элементы сценария» — element_type (тип поля «Выбор из списка»).
 export function selectOptionsFor(
 	tableName: string,
 	columnName: string
 ): { value: string; label: string }[] {
-	if (tableName === 'flow_nodes' && columnName === 'node_type') {
+	if (
+		(tableName === 'flow_nodes' && columnName === 'node_type') ||
+		(tableName === 'flow_elements' && columnName === 'element_type')
+	) {
 		return FLOW_ELEMENTS.map((e) => ({ value: e.type, label: e.label }));
 	}
 	return [];

@@ -52,42 +52,23 @@ function nodeTitle(node: LocalLine): string {
 	if (d.name != null && String(d.name) !== '') return String(d.name);
 	return String(d.number ?? node.id);
 }
-// Параметры узла: jsonb «params» (дефолты) + входные данные от предшественников.
-// В ТЧ jsonb хранится строкой — разбираем в объект.
-function nodeParams(node: LocalLine, inputs: Record<string, unknown>): Record<string, any> {
-	const d = node.data ?? {};
-	let base: Record<string, any> = {};
-	if (d.params && typeof d.params === 'object' && !Array.isArray(d.params)) {
-		base = d.params;
-	} else if (typeof d.params === 'string' && d.params.trim()) {
+// Парсинг jsonb-параметров (объект или JSON-строка) в объект.
+function parseParams(value: unknown): Record<string, any> {
+	if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+	if (typeof value === 'string' && value.trim()) {
 		try {
-			const parsed = JSON.parse(d.params);
-			if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) base = parsed;
-		} catch {
-			// битый JSON в параметрах узла игнорируем
-		}
-	}
-	return { ...base, ...inputs };
-}
-
-// Сырые параметры узла (jsonb «params», без слияния входов) — для элементов
-function rawNodeParams(node: LocalLine): Record<string, any> {
-	const d = node.data ?? {};
-	if (d.params && typeof d.params === 'object' && !Array.isArray(d.params)) {
-		return d.params;
-	}
-	if (typeof d.params === 'string' && d.params.trim()) {
-		try {
-			const parsed = JSON.parse(d.params);
+			const parsed = JSON.parse(value);
 			if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
 		} catch {
-			// битый JSON в параметрах узла игнорируем
+			// битый JSON игнорируем
 		}
 	}
 	return {};
 }
 
 // Выполнить один узел:
+//   - узел может ссылаться на запись каталога «Элементы сценария» (flow_elements):
+//     элемент задаёт тип/сервис/параметры/код по умолчанию, узел — переопределения;
 //   - node_type === 'start' — вернуть входные параметры как есть (стартовая точка);
 //   - node_type — элемент из каталога (constant/get/api/template/find/create/run);
 //   - есть service (ссылка на api_services) — декларативный apiCall(service, params);
@@ -101,11 +82,26 @@ async function executeNode(
 	scenarioParams: Record<string, any>
 ): Promise<unknown> {
 	const d = node.data ?? {};
-	const type = String(d.node_type || '').trim();
-	const code = String(d.code || '').trim();
-	const serviceId = d.service ? String(d.service) : '';
+	let type = String(d.node_type || '').trim();
+	let code = String(d.code || '').trim();
+	let serviceId = d.service ? String(d.service) : '';
 
-	const params = nodeParams(node, inputs);
+	const nodeBase = parseParams(d.params);
+	let elementParams: Record<string, any> = {};
+	if (d.element) {
+		const element = await db.data_records.get(String(d.element));
+		if (element) {
+			const ed = element.data ?? {};
+			if (!type) type = String(ed.element_type || '').trim();
+			if (!code) code = String(ed.code || '').trim();
+			if (!serviceId && ed.service) serviceId = String(ed.service);
+			elementParams = parseParams(ed.params);
+		}
+	}
+
+	// Приоритет: входные данные > переопределения узла > дефолты элемента.
+	const rawParams = { ...elementParams, ...nodeBase };
+	const params = { ...rawParams, ...inputs };
 
 	if (type === 'start') {
 		return params;
@@ -116,10 +112,17 @@ async function executeNode(
 	// Элемент из каталога (constant/get/api/template/find/create/run)
 	const ELEMENT_TYPES = ['constant', 'get', 'api', 'template', 'find', 'create', 'run'];
 	if (ELEMENT_TYPES.includes(type)) {
+		// Эффективный узел: элемент-дефолты слиты в data, чтобы реализации элементов
+		// (elementApi читает node.data.service, elementConstant — params и т.д.)
+		// работали единообразно и для узлов со ссылкой на запись каталога.
+		const effNode: LocalLine = {
+			...node,
+			data: { ...d, node_type: type, code, service: serviceId, params: rawParams }
+		};
 		const e: FlowElementInput = {
-			node,
+			node: effNode,
 			input,
-			params: rawNodeParams(node),
+			params: rawParams,
 			scenario,
 			scenarioLines,
 			scenarioParams,

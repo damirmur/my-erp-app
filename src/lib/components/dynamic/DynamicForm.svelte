@@ -398,14 +398,18 @@
 			recordData = { ...(updated.data ?? {}) };
 		}
 		workspace.setDirty(tabId, false);
-		workspace.showApiResult({
-			href: buildExecuteUrl(recordId),
-			label: `${tableTitle} №${recordData.number || recordData.name || '…'} · Выполнить`,
-			ok: result.ok,
-			value: result.ok ? result.value : undefined,
-			error: result.error,
-			executedAt: new Date().toISOString()
-		});
+		// Панель «API» открываем только при ошибке или реальном возвращаемом
+		// значении — код, который ничего не вернул, не должен выскакивать пустым.
+		if (!result.ok || result.value !== undefined) {
+			workspace.showApiResult({
+				href: buildExecuteUrl(recordId),
+				label: `${tableTitle} №${recordData.number || recordData.name || '…'} · Выполнить`,
+				ok: result.ok,
+				value: result.ok ? result.value : undefined,
+				error: result.error,
+				executedAt: new Date().toISOString()
+			});
+		}
 	}
 
 	async function handleDelete() {

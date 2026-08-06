@@ -191,11 +191,15 @@ class WorkspaceManager {
 		if (!link) return false;
 
 		// API-режим: данные/выполнение кода без открытия формы или списка.
-		// Результат показывается в панели «API» (apiResult).
+		// Результат показывается в панели «API» (apiResult). Панель открываем
+		// только при ошибке или реальном возвращаемом значении — иначе код,
+		// который ничего не вернул (value = undefined), выскакивал бы пустым.
 		if (link.kind === 'execute' || link.kind === 'recordJson' || link.kind === 'listJson') {
 			const result = await runApiCommand(link);
 			if (!result) return false;
-			this.apiResult = result;
+			if (!result.ok || result.value !== undefined) {
+				this.apiResult = result;
+			}
 			return true;
 		}
 

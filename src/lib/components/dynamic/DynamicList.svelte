@@ -405,15 +405,18 @@
 		const selected = records.filter((r) => selectedIds.includes(r.id));
 		const result = await runRecordAction(selected[0]?.id ?? '', mergeParams(selected[0] ?? null));
 		if (selected.length === 1 && selected[0]) {
-			const num = selected[0].data?.number || selected[0].data?.name;
-			workspace.showApiResult({
-				href: buildExecuteUrl(selected[0].id),
-				label: `${tableMeta?.title ?? ''} №${num || '…'} · Выполнить`,
-				ok: result.ok,
-				value: result.ok ? result.value : undefined,
-				error: result.error,
-				executedAt: new Date().toISOString()
-			});
+			// Панель «API» — только при ошибке или реальном результате
+			if (!result.ok || result.value !== undefined) {
+				const num = selected[0].data?.number || selected[0].data?.name;
+				workspace.showApiResult({
+					href: buildExecuteUrl(selected[0].id),
+					label: `${tableMeta?.title ?? ''} №${num || '…'} · Выполнить`,
+					ok: result.ok,
+					value: result.ok ? result.value : undefined,
+					error: result.error,
+					executedAt: new Date().toISOString()
+				});
+			}
 		}
 	}
 

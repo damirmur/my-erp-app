@@ -53,18 +53,24 @@ export async function runActionCode(code: string, ctx: RunActionContext): Promis
 
 // Слияние входных параметров: дефолты из jsonb-поля «Параметры» записи
 // (record.data.params) переопределяются параметрами из ссылки/кнопки по ключу.
-// Для записей без дефолтов возвращает просто параметры вызова.
+// Для записей без дефолтов возвращает просто параметры вызова. Принимает params
+// и как объект, и как JSON-строку (некоторые формы хранят jsonb строкой).
 export function mergeParams(
 	record: LocalRecord | null,
 	linkParams: Record<string, any> = {}
 ): Record<string, any> {
-	const defaults =
-		record?.data &&
-		typeof record.data.params === 'object' &&
-		record.data.params !== null &&
-		!Array.isArray(record.data.params)
-			? (record.data.params as Record<string, any>)
-			: {};
+	let defaults: Record<string, any> = {};
+	const p = record?.data?.params;
+	if (p && typeof p === 'object' && !Array.isArray(p)) {
+		defaults = p;
+	} else if (typeof p === 'string' && p.trim()) {
+		try {
+			const parsed = JSON.parse(p);
+			if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) defaults = parsed;
+		} catch {
+			// битый JSON — игнорируем
+		}
+	}
 	return { ...defaults, ...(linkParams ?? {}) };
 }
 

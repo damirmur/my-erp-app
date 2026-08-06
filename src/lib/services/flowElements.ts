@@ -186,8 +186,34 @@ async function elementTemplate({
 	return substitute(template, ctx);
 }
 
-async function elementFind({ input, params, scenarioParams }: FlowElementInput): Promise<unknown> {
+async function elementFind({
+	input,
+	params,
+	scenarioParams,
+	scenario
+}: FlowElementInput): Promise<unknown> {
 	const ctx = subContext(input, scenarioParams);
+	// Подстраховка: если параметры сценария не доехали в контекст движка
+	// (например, data.params хранится строкой), берём их напрямую из записи
+	// сценария — недостающие ключи добавляем, но не переопределяем.
+	const directParams = scenario?.data?.params;
+	let direct: Record<string, any> | null = null;
+	if (directParams && typeof directParams === 'object' && !Array.isArray(directParams)) {
+		direct = directParams;
+	} else if (typeof directParams === 'string' && directParams.trim()) {
+		try {
+			const parsed = JSON.parse(directParams);
+			if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) direct = parsed;
+		} catch {
+			// битый JSON — игнорируем
+		}
+	}
+	if (direct) {
+		for (const [k, v] of Object.entries(direct)) {
+			if (ctx[k] === undefined) ctx[k] = v;
+		}
+	}
+
 	const p = substitute(params, ctx);
 	const tableName = String(p.table ?? '');
 	if (!tableName) throw new Error('Узел «Найти запись»: укажите table');
@@ -306,7 +332,11 @@ async function elementFind({ input, params, scenarioParams }: FlowElementInput):
 	if (found.length === 0) {
 		console.warn(
 			`Узел «Найти запись»: в «${tableName}» ничего не найдено. where=`,
-			JSON.stringify(where)
+			JSON.stringify(where),
+			'ctxKeys=',
+			JSON.stringify(Object.keys(ctx)),
+			'scenarioParams=',
+			JSON.stringify(scenario?.data?.params ?? null)
 		);
 		throw new Error(`Узел «Найти запись»: в «${tableName}» ничего не найдено`);
 	}

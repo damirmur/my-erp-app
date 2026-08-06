@@ -385,6 +385,40 @@ class MetadataManager {
 		if (error) alert(`Ошибка сохранения синонима: ${error.message}`);
 	}
 
+	// Переименование таблицы (поле `name`, используется как ключ: ссылки
+	// #/t/{id|name}, поиск системных таблиц по name). Проверяем уникальность
+	// на сервере (не считая саму таблицу) и пишем в локальный кэш — иначе
+	// следующий pullMetadata затёр бы изменение.
+	async updateTableName(tableId: string, name: string): Promise<boolean> {
+		try {
+			const { data: dup } = await supabase
+				.from('meta_tables')
+				.select('id')
+				.eq('name', name)
+				.neq('id', tableId)
+				.limit(1);
+			if (dup && dup.length > 0) {
+				alert(`Имя "${name}" уже используется другой таблицей.`);
+				return false;
+			}
+		} catch {
+			// сервер недоступен — полагаемся на локальную проверку уникальности
+		}
+		const localRows = await db.meta_tables.where('name').equals(name).toArray();
+		if (localRows.some((t) => t.id !== tableId)) {
+			alert(`Имя "${name}" уже используется другой таблицей.`);
+			return false;
+		}
+		const { error } = await supabase.from('meta_tables').update({ name }).eq('id', tableId);
+		if (error) {
+			alert(`Ошибка смены имени: ${error.message}`);
+			return false;
+		}
+		const local = await db.meta_tables.get(tableId);
+		if (local) await db.meta_tables.put({ ...local, name });
+		return true;
+	}
+
 	async deleteTable(tableId: string) {
 		// Удаляем и строки ТЧ таблицы (записей у подтаблиц не бывает),
 		// чтобы они не остались в локальном кэше и не сломали push

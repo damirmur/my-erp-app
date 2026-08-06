@@ -87,6 +87,15 @@
 	// Синоним таблицы (черновик)
 	let tableSynonym = $state('');
 
+	// Имя таблицы (черновик; лат., используется как ключ в ссылках #/t/{id|name})
+	let tableCodeName = $state('');
+
+	// Смена имени запрещена для таблиц, которые сиды находят по name
+	// (constant — «Константы», system — «История» и системные модули)
+	let canChangeName = $derived(
+		!!selectedTableMeta && !['constant', 'system'].includes(selectedTableMeta.type)
+	);
+
 	// Черновик типа таблицы (null — тип менять нельзя)
 	let selectedType = $state<string | null>(null);
 
@@ -153,6 +162,7 @@
 		selectedTableMeta = (await db.meta_tables.get(selectedTableId)) ?? null;
 		if (!selectedTableMeta) return;
 		tableSynonym = selectedTableMeta.title;
+		tableCodeName = selectedTableMeta.name ?? '';
 		selectedTypeDef = getTableType(selectedTableMeta.type);
 		selectedType = selectedTableMeta.type;
 		const effective = getEffectiveConfig(selectedTableMeta);
@@ -362,6 +372,18 @@
 			if (tableSynonym !== selectedTableMeta.title) {
 				await metadata.updateTableTitle(selectedTableId, tableSynonym);
 			}
+			// Переименование (имя — ключ таблицы). Валидируем: латиница/цифры/_
+			// и уникальность (проверка внутри metadata.updateTableName).
+			if (canChangeName && tableCodeName.trim() !== (selectedTableMeta.name ?? '')) {
+				const newName = tableCodeName.trim();
+				if (!/^[a-z0-9_]+$/i.test(newName)) {
+					alert('Имя таблицы должно содержать только латинские буквы, цифры и «_».');
+					return;
+				}
+				const renamed = await metadata.updateTableName(selectedTableId, newName);
+				if (!renamed) return;
+				tableCodeName = newName;
+			}
 			// Фичи/readOnly перезаписываем до сохранения конфига
 			if (typeChanged && selectedType) {
 				const newType = getTableType(selectedType);
@@ -526,6 +548,33 @@
 					oninput={markDirty}
 					placeholder="Синоним (рус.)"
 				/>
+			</div>
+
+			<div class="field-group">
+				<label for="cfg-name">Имя таблицы (лат., ключ)</label>
+				{#if canChangeName}
+					<input
+						id="cfg-name"
+						type="text"
+						bind:value={tableCodeName}
+						oninput={markDirty}
+						placeholder="tasks, goods, documents..."
+						class="cfg-type-select"
+					/>
+					<div class="cfg-type-hint">
+						Используется как ключ таблицы в ссылках #/t/id|name и в коде. После переименования
+						старые ссылки по имени перестанут работать (по id — работают).
+					</div>
+				{:else}
+					<input
+						id="cfg-name"
+						type="text"
+						value={selectedTableMeta.name ?? ''}
+						disabled
+						class="cfg-type-select"
+						title="Системные и константные таблицы нельзя переименовывать"
+					/>
+				{/if}
 			</div>
 
 			<div class="field-group">

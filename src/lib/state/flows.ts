@@ -323,19 +323,16 @@ export async function seedFlowExample(): Promise<void> {
 				node_type: 'template',
 				params: {
 					template:
-						'Погода в городе ${location.name}: ${current.temp_c}°C, ${current.condition.text}'
+						'Погода в городе ${nearest_area.0.areaName.0.value}: ${current_condition.0.temp_C}°C, ${current_condition.0.weatherDesc.0.value}'
 				},
 				code: ''
 			}
 		},
 		{
 			data: {
-				name: 'Текст прогноза',
-				node_type: 'template',
-				params: {
-					template:
-						'Погода в городе ${nearest_area.0.areaName.0.value}: ${current_condition.0.temp_C}°C, ${current_condition.0.weatherDesc.0.value}'
-				},
+				name: 'Канал контрагента',
+				node_type: 'find',
+				params: { table: 'contragent_contacts', where: { record_id: '${kontragent}' } },
 				code: ''
 			}
 		},

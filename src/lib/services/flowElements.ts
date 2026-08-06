@@ -246,63 +246,70 @@ async function elementFind({ input, params, scenarioParams }: FlowElementInput):
 	// 1. Локальный кэш (offline-first)
 	let found: any[] = await searchLocal();
 
-	// 2. Fallback на сервер: если локально не найдено и мы онлайн — ищем напрямую
-	// в Supabase. Короткая пауза перед запросом даёт шанс текущему синку докачать
-	// только что изменённые строки (иначе локальный поиск мог опередить pull).
-	// Строки ТЧ живут в data_lines с table_id = id подчинённой таблицы; id таблицы
-	// берём с сервера по name (авторитетный), т.к. локальный кэш может отставать.
+	// 2. Fallback на сервер: если локально не найдено — ищем напрямую в Supabase.
+	// Пробуем всегда: navigator.onLine бывает неточным (ошибочно «false» при живом
+	// интернете), а таймаут защищает офлайн-запуск от долгого ожидания. Короткая
+	// пауза даёт шанс текущему синку докачать свежие строки.
+	// Строки ТЧ живут в data_lines с table_id = id подчинённой таблицы. Id берём
+	// с сервера по name (авторитетный); если локальный кэш метаданных отстаёт и id
+	// разошлись — ищем по обоим.
 	if (found.length === 0) {
-		const online = typeof navigator === 'undefined' || navigator.onLine;
 		if (typeof window !== 'undefined') await new Promise((r) => setTimeout(r, 1200));
 		found = await searchLocal();
-		if (online) {
-			try {
-				const serverTable = await withTimeout(
-					supabase
-						.from('meta_tables')
-						.select('id,parent_table_id')
-						.eq('name', tableName)
-						.maybeSingle(),
-					8000
-				);
-				const sid = serverTable.data?.id ?? table.id;
-				const serverIsLine = !!(serverTable.data?.parent_table_id || p.line === true);
-				const src = serverIsLine ? 'data_lines' : tableName;
-				const q = supabase.from(src).select('*').limit(1000);
-				if (serverIsLine) q.eq('table_id', sid);
-				const { data, error } = await withTimeout(q, 8000);
-				const serverRows: any[] = data ?? [];
-				if (error) {
-					console.warn(`Узел «Найти запись»: запрос к серверу не удался (${error.message})`);
-				} else if (serverRows.length > 0) {
-					const candidates = serverRows.map((r: any) => ({
+		try {
+			const serverTable = await withTimeout(
+				supabase
+					.from('meta_tables')
+					.select('id,parent_table_id')
+					.eq('name', tableName)
+					.maybeSingle(),
+				8000
+			);
+			const sid = serverTable.data?.id ?? tableId;
+			const serverIsLine = !!(serverTable.data?.parent_table_id || p.line === true);
+			const src = serverIsLine ? 'data_lines' : tableName;
+			const q = supabase.from(src).select('*').limit(1000);
+			if (serverIsLine) {
+				if (sid !== tableId) q.in('table_id', [sid, tableId]);
+				else q.eq('table_id', sid);
+			}
+			const { data, error } = await withTimeout(q, 8000);
+			const serverRows: any[] = data ?? [];
+			if (error) {
+				console.warn(`Узел «Найти запись»: запрос к серверу не удался (${error.message})`);
+			} else if (serverRows.length > 0) {
+				const candidates = serverRows.map((r: any) => ({
+					id: r.id,
+					record_id: r.record_id ?? null,
+					data: r.data ?? {}
+				}));
+				found = candidates.filter((row) => matches(row));
+			}
+			// Найденные строки доливаем в локальный кэш, чтобы последующие узлы
+			// (например, «Отправить» → NOTIFY_RUN_CODE) видели контакты.
+			if (found.length > 0 && serverIsLine) {
+				await db.data_lines.bulkPut(
+					serverRows.map((r: any) => ({
 						id: r.id,
 						record_id: r.record_id ?? null,
-						data: r.data ?? {}
-					}));
-					found = candidates.filter((row) => matches(row));
-				}
-				// Найденные строки доливаем в локальный кэш, чтобы последующие узлы
-				// (например, «Отправить» → NOTIFY_RUN_CODE) видели контакты.
-				if (found.length > 0 && serverIsLine) {
-					await db.data_lines.bulkPut(
-						serverRows.map((r: any) => ({
-							id: r.id,
-							record_id: r.record_id ?? null,
-							table_id: r.table_id ?? sid,
-							data: r.data ?? {},
-							sort_order: r.sort_order ?? 0
-						}))
-					);
-				}
-			} catch (e) {
-				console.warn('Узел «Найти запись»: сервер недоступен, работаю по локальному кэшу', e);
+						table_id: r.table_id ?? sid,
+						data: r.data ?? {},
+						sort_order: r.sort_order ?? 0
+					}))
+				);
 			}
+		} catch (e) {
+			console.warn('Узел «Найти запись»: сервер недоступен, работаю по локальному кэшу', e);
 		}
 	}
 
-	if (found.length === 0)
+	if (found.length === 0) {
+		console.warn(
+			`Узел «Найти запись»: в «${tableName}» ничего не найдено. where=`,
+			JSON.stringify(where)
+		);
 		throw new Error(`Узел «Найти запись»: в «${tableName}» ничего не найдено`);
+	}
 
 	if (all) return found.map(toResult);
 	return toResult(found[0]);

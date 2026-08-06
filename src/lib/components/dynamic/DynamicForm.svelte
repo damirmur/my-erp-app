@@ -13,6 +13,7 @@
 	import Toolbar from './Toolbar.svelte';
 	import TabularSection from './TabularSection.svelte';
 	import PeriodsTable from './PeriodsTable.svelte';
+	import FlowRefsPanel from './FlowRefsPanel.svelte';
 
 	let { tableId, recordId, tabId = '', focusLineId = '' } = $props();
 
@@ -541,6 +542,10 @@
 					</div>
 				{/each}
 			</div>
+
+			{#if tableType === 'flow'}
+				<FlowRefsPanel data={recordData} lines={allLines} />
+			{/if}
 
 			{#if objectSubTables.length > 0 && (!isConstant || isPeriodic)}
 				<div class="sub-tabs-wrapper">

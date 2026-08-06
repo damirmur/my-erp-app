@@ -60,9 +60,16 @@ export function pathGet(obj: unknown, path: string): unknown {
 }
 
 // Подстановка ${path} в строках и рекурсивно в объектах/массивах.
-// Несуществующие пути заменяются пустой строкой.
+// Несуществующие пути заменяются пустой строкой. Если вся строка — одна точная
+// подстановка (${путь}), значение сохраняет свой тип (массив/объект), иначе
+// подставляется в строку. Это позволяет передавать массивы (например, в lines).
 export function substitute(value: unknown, ctx: Record<string, any>): any {
 	if (typeof value === 'string') {
+		const exact = value.match(/^\$\{([^}]+)\}$/);
+		if (exact) {
+			const v = pathGet(ctx, exact[1].trim());
+			if (v !== undefined) return v;
+		}
 		return value.replace(/\$\{([^}]+)\}/g, (_, p: string) => {
 			const v = pathGet(ctx, p.trim());
 			if (v === undefined) return '';
@@ -193,35 +200,61 @@ async function elementFind({ input, params, scenarioParams }: FlowElementInput):
 	// Ищем в обеих сразу: локальный кэш метаданных может отставать (parent_table_id
 	// ещё не подтянут), тогда строки ТЧ лежат только в data_lines.
 	const isLine = !!(parentTableId || p.line === true);
+	// all: true — вернуть ВСЕ совпадения (массив), а не первое. Значения where,
+	// являющиеся массивами, трактуются как «in» (запись подходит, если её значение
+	// входит в список) — это позволяет искать контакты сразу нескольких объектов.
+	const all = p.all === true;
+
+	// map: { имя_в_результате: 'поле_источника' } — переложить найденные строки
+	// в нужную форму (например, контакты → строки получателей { kontragent, channel }).
+	function mapped(row: any): Record<string, any> {
+		if (!p.map || typeof p.map !== 'object' || Array.isArray(p.map)) return row;
+		const mapSpec: Record<string, string> = p.map;
+		const out: Record<string, any> = {};
+		for (const [k, srcKey] of Object.entries(mapSpec)) {
+			out[k] = row[srcKey] ?? row.data?.[srcKey] ?? '';
+		}
+		return out;
+	}
+
+	function toResult(row: any): Record<string, any> {
+		if (!p.map || typeof p.map !== 'object' || Array.isArray(p.map)) {
+			return { id: row.id, record_id: row.record_id ?? null, ...(row.data ?? {}) };
+		}
+		return mapped(row);
+	}
 
 	function matches(row: any): boolean {
 		for (const [k, v] of Object.entries(where)) {
 			const rv = row[k] ?? row.data?.[k];
-			if (String(rv ?? '') !== String(v ?? '')) return false;
+			const srv = String(rv ?? '');
+			if (Array.isArray(v)) {
+				if (!v.map(String).includes(srv)) return false;
+			} else if (srv !== String(v ?? '')) return false;
 		}
 		return true;
 	}
 
-	async function searchLocal(): Promise<any> {
+	async function searchLocal(): Promise<any[]> {
 		const [lineRows, recordRows] = await Promise.all([
 			db.data_lines.where('table_id').equals(tableId).toArray(),
 			db.data_records.where('table_id').equals(tableId).toArray()
 		]);
-		return [...lineRows, ...recordRows].find((row) => matches(row));
+		return [...lineRows, ...recordRows].filter((row) => matches(row));
 	}
 
 	// 1. Локальный кэш (offline-first)
-	let match: any = await searchLocal();
+	let found: any[] = await searchLocal();
 
 	// 2. Fallback на сервер: если локально не найдено и мы онлайн — ищем напрямую
 	// в Supabase. Короткая пауза перед запросом даёт шанс текущему синку докачать
 	// только что изменённые строки (иначе локальный поиск мог опередить pull).
 	// Строки ТЧ живут в data_lines с table_id = id подчинённой таблицы; id таблицы
 	// берём с сервера по name (авторитетный), т.к. локальный кэш может отставать.
-	if (!match) {
+	if (found.length === 0) {
 		const online = typeof navigator === 'undefined' || navigator.onLine;
 		if (typeof window !== 'undefined') await new Promise((r) => setTimeout(r, 1200));
-		match = await searchLocal();
+		found = await searchLocal();
 		if (online) {
 			try {
 				const serverTable = await withTimeout(
@@ -247,11 +280,11 @@ async function elementFind({ input, params, scenarioParams }: FlowElementInput):
 						record_id: r.record_id ?? null,
 						data: r.data ?? {}
 					}));
-					match = candidates.find((row) => matches(row));
+					found = candidates.filter((row) => matches(row));
 				}
 				// Найденные строки доливаем в локальный кэш, чтобы последующие узлы
 				// (например, «Отправить» → NOTIFY_RUN_CODE) видели контакты.
-				if (match && serverIsLine) {
+				if (found.length > 0 && serverIsLine) {
 					await db.data_lines.bulkPut(
 						serverRows.map((r: any) => ({
 							id: r.id,
@@ -268,8 +301,11 @@ async function elementFind({ input, params, scenarioParams }: FlowElementInput):
 		}
 	}
 
-	if (!match) throw new Error(`Узел «Найти запись»: в «${tableName}» ничего не найдено`);
-	return { id: match.id, record_id: match.record_id ?? null, ...(match.data ?? {}) };
+	if (found.length === 0)
+		throw new Error(`Узел «Найти запись»: в «${tableName}» ничего не найдено`);
+
+	if (all) return found.map(toResult);
+	return toResult(found[0]);
 }
 
 async function elementCreate({

@@ -202,29 +202,54 @@ export async function ensureFlowTables(): Promise<void> {
 
 // ===== Сид-пример: «Погода → сообщение» =====
 // Граф: константа «city» → извлечь город → запрос погоды (wttr.in) → шаблон
-// текста → найти канал контрагента → создать «Сообщение» → отправить.
-// Контрагент задаётся параметром сценария (data.params.kontragent) — его можно
-// переопределить через execute-ссылку: #/r/{сценарий}.execute({kontragent:...}).json
+// текста → найти контакты контрагентов (find.all) → создать «Сообщение» → отправить.
+// Контрагенты задаются параметром сценария (data.params.kontragents — массив UUID);
+// их можно переопределить через execute-ссылку:
+//   #/r/{сценарий}.execute({kontragents:["<uuid>", "..."]}).json
 
 export const FLOW_EXAMPLE_NAME = 'Погода → сообщение (пример)';
 
-// Нет ли уже такого сценария (локально или на сервере) — идемпотентность по name.
-async function flowExampleExists(scenarioTableId: string, online: boolean): Promise<boolean> {
+// Найти пример сценария (локально или на сервере) по name.
+async function findExample(scenarioTableId: string, online: boolean): Promise<LocalRecord | null> {
 	const local = await db.data_records
 		.where('table_id')
 		.equals(scenarioTableId)
 		.filter((r) => r.data?.name === FLOW_EXAMPLE_NAME)
 		.first();
-	if (local) return true;
-	if (!online) return false;
+	if (local) return local;
+	if (!online) return null;
 	try {
 		const { data } = await supabase
 			.from('data_records')
-			.select('data')
+			.select('*')
 			.eq('table_id', scenarioTableId);
-		return (data ?? []).some((r: any) => r.data?.name === FLOW_EXAMPLE_NAME);
+		return (data ?? []).find((r: any) => r.data?.name === FLOW_EXAMPLE_NAME) ?? null;
 	} catch {
-		return false;
+		return null;
+	}
+}
+
+// Пример в новом формате: все узлы ссылаются на каталог «Элементы сценария».
+async function exampleUsesElements(exampleId: string): Promise<boolean> {
+	const nodesTable = await db.meta_tables.where('name').equals(FLOW_NODES_TABLE).first();
+	if (!nodesTable) return false;
+	const nodes = (await db.data_lines.where('record_id').equals(exampleId).toArray()).filter(
+		(l) => l.table_id === nodesTable.id
+	);
+	return nodes.length > 0 && nodes.every((l) => l.data?.element);
+}
+
+// Удалить сценарий целиком (локально и на сервере).
+async function deleteScenario(recordId: string, online: boolean): Promise<void> {
+	await db.data_lines.where('record_id').equals(recordId).delete();
+	await db.data_records.delete(recordId);
+	if (online) {
+		try {
+			await supabase.from('data_lines').delete().eq('record_id', recordId);
+			await supabase.from('data_records').delete().eq('id', recordId);
+		} catch {
+			// уедет при ближайшем синке
+		}
 	}
 }
 
@@ -362,9 +387,14 @@ async function seedFlowElements(online: boolean, wttrId: string): Promise<Map<st
 			}
 		},
 		{
-			name: 'Найти канал контрагента',
+			name: 'Найти контакты контрагентов',
 			element_type: 'find',
-			params: { table: 'contragent_contacts', where: { record_id: '${kontragent}' } }
+			params: {
+				table: 'contragent_contacts',
+				where: { record_id: '${kontragents}' },
+				all: true,
+				map: { kontragent: 'record_id', channel: 'channel' }
+			}
 		},
 		{
 			name: 'Создать сообщение',
@@ -372,9 +402,20 @@ async function seedFlowElements(online: boolean, wttrId: string): Promise<Map<st
 			params: {
 				table: 'notify_messages',
 				data: { subject: 'Прогноз погоды', message: '${Текст прогноза}' },
-				lines: {
-					notify_message_channels: [{ kontragent: '${kontragent}', channel: '${channel}' }]
-				}
+				lines: { notify_message_channels: '${Контакты контрагентов}' }
+			},
+			// Старый заводской конфиг (одна строка получателя) — обновляем до нового
+			// (массив получателей из контекста), пока элемент не редактировали вручную.
+			legacy: {
+				element_type: 'create',
+				params: {
+					table: 'notify_messages',
+					data: { subject: 'Прогноз погоды', message: '${Текст прогноза}' },
+					lines: {
+						notify_message_channels: [{ kontragent: '${kontragent}', channel: '${channel}' }]
+					}
+				},
+				service: ''
 			}
 		},
 		{
@@ -384,6 +425,31 @@ async function seedFlowElements(online: boolean, wttrId: string): Promise<Map<st
 		}
 	];
 
+	// Элементы, заменённые в новой архитектуре: удаляем, только если они всё ещё
+	// хранят заводской конфиг (не тронуты пользователем).
+	const legacyRemove: Array<{ name: string; legacy: Record<string, any> }> = [
+		{
+			name: 'Найти канал контрагента',
+			legacy: {
+				element_type: 'find',
+				params: { table: 'contragent_contacts', where: { record_id: '${kontragent}' } },
+				service: ''
+			}
+		}
+	];
+
+	function same(a: any, b: any): boolean {
+		return JSON.stringify(a) === JSON.stringify(b);
+	}
+
+	function keyConfig(d: any): Record<string, any> {
+		return {
+			element_type: d?.element_type ?? '',
+			params: d?.params ?? {},
+			service: d?.service ?? ''
+		};
+	}
+
 	for (const def of defs) {
 		const existing = await db.data_records
 			.where('table_id')
@@ -391,6 +457,37 @@ async function seedFlowElements(online: boolean, wttrId: string): Promise<Map<st
 			.filter((r) => r.data?.name === def.name)
 			.first();
 		if (existing) {
+			const target = {
+				element_type: def.element_type,
+				params: def.params ?? {},
+				service: def.service ?? ''
+			};
+			// Элемент всё ещё на старом заводском конфиге — поднимаем до нового дефолта.
+			if (def.legacy && same(keyConfig(existing.data), def.legacy)) {
+				const data = { ...existing.data, ...target };
+				await db.data_records.put({
+					...existing,
+					data,
+					is_dirty: 1,
+					updated_at: new Date().toISOString()
+				});
+				if (online) {
+					try {
+						await supabase.from('data_records').upsert({
+							id: existing.id,
+							table_id: table.id,
+							status: existing.status,
+							data,
+							is_dirty: 1,
+							updated_at: new Date().toISOString(),
+							is_folder: existing.is_folder ?? false,
+							parent_id: existing.parent_id ?? null
+						});
+					} catch {
+						// уедет при ближайшем синке
+					}
+				}
+			}
 			nameToId.set(def.name, existing.id);
 			continue;
 		}
@@ -421,6 +518,26 @@ async function seedFlowElements(online: boolean, wttrId: string): Promise<Map<st
 		}
 		nameToId.set(def.name, record.id);
 	}
+
+	// Удаляем legacy-элементы (переименованные/заменённые), не тронутые пользователем.
+	for (const rm of legacyRemove) {
+		const existing = await db.data_records
+			.where('table_id')
+			.equals(table.id)
+			.filter((r) => r.data?.name === rm.name)
+			.first();
+		if (!existing) continue;
+		if (!same(keyConfig(existing.data), rm.legacy)) continue;
+		await db.data_records.delete(existing.id);
+		if (online) {
+			try {
+				await supabase.from('data_records').delete().eq('id', existing.id);
+			} catch {
+				// уедет при ближайшем синке
+			}
+		}
+	}
+
 	return nameToId;
 }
 
@@ -439,11 +556,18 @@ export async function seedFlowExample(): Promise<void> {
 	// сценарий уже существует — элементы нужны для редактирования и переиспользования.
 	const wttr = await db.data_records.filter((r) => r.data?.name === 'wttr.in — погода').first();
 	const elements = wttr ? await seedFlowElements(online, wttr.id) : new Map<string, string>();
-
-	if (await flowExampleExists(scenarioTable.id, online)) return;
 	if (!wttr) {
 		console.warn('Сид-пример сценария: не найден сервис wttr.in, пример не создан.');
 		return;
+	}
+
+	// Старый inline-пример (до каталога элементов) удаляем и пересоздаём в новом
+	// формате — обратной совместимости нет.
+	const existing = await findExample(scenarioTable.id, online);
+	if (existing) {
+		if (await exampleUsesElements(existing.id)) return;
+		console.log('Сид-пример: пересоздаю сценарий в новом формате (каталог элементов).');
+		await deleteScenario(existing.id, online);
 	}
 
 	await ensureCityConstant(online);
@@ -455,26 +579,32 @@ export async function seedFlowExample(): Promise<void> {
 	const KONTRAGENT = '0bc5fc65-5db6-48c9-9810-fb52597356c4';
 
 	// Узлы. Имена узлов — ключи контекста: на результат узла «Текст прогноза»
-	// ссылается узел «Создать сообщение» через ${Текст прогноза}. Конфиг живёт в
-	// элементах каталога; здесь — только ссылки (параметры/код можно переопределить).
+	// ссылается узел «Создать сообщение» через ${Текст прогноза}, на «Контакты
+	// контрагентов» (массив получателей от find.all) — через ${Контакты контрагентов}.
 	const nodes = [
 		{ data: { name: 'Константа города', element: el('Константа города'), params: {} } },
 		{ data: { name: 'Извлечь город', element: el('Извлечь город'), params: {} } },
 		{ data: { name: 'Погода', element: el('Погода (wttr.in)'), params: {} } },
 		{ data: { name: 'Текст прогноза', element: el('Текст прогноза'), params: {} } },
-		{ data: { name: 'Канал контрагента', element: el('Найти канал контрагента'), params: {} } },
+		{
+			data: {
+				name: 'Контакты контрагентов',
+				element: el('Найти контакты контрагентов'),
+				params: {}
+			}
+		},
 		{ data: { name: 'Создать сообщение', element: el('Создать сообщение'), params: {} } },
 		{ data: { name: 'Отправить', element: el('Отправить сообщение'), params: {} } }
 	];
 
-	// Связи: последовательные рёбра; «Канал контрагента» не зависит от текста,
+	// Связи: последовательные рёбра; «Контакты контрагентов» не зависит от текста,
 	// поэтому идёт отдельной веткой (параллельно запросу погоды).
 	const links = [
 		{ from: 'Константа города', to: 'Извлечь город', role: 'flow', label: 'city' },
 		{ from: 'Извлечь город', to: 'Погода', role: 'flow', label: 'запрос' },
 		{ from: 'Погода', to: 'Текст прогноза', role: 'flow', label: 'результат' },
 		{ from: 'Текст прогноза', to: 'Создать сообщение', role: 'flow', label: 'текст' },
-		{ from: 'Канал контрагента', to: 'Создать сообщение', role: 'flow', label: 'канал' },
+		{ from: 'Контакты контрагентов', to: 'Создать сообщение', role: 'flow', label: 'получатели' },
 		{ from: 'Создать сообщение', to: 'Отправить', role: 'flow', label: 'отправка' }
 	];
 
@@ -483,7 +613,7 @@ export async function seedFlowExample(): Promise<void> {
 		scenarioTable.id,
 		nodesTable.id,
 		linksTable.id,
-		{ kontragent: KONTRAGENT },
+		{ kontragents: [KONTRAGENT] },
 		nodes,
 		links,
 		online

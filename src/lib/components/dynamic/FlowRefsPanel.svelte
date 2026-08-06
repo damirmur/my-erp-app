@@ -80,7 +80,12 @@
 			// Параметры сценария
 			const pRefs: Ref[] = [];
 			for (const [k, v] of Object.entries(paramsObj)) {
-				if (isRecordId(v)) {
+				if (Array.isArray(v) && v.every(isRecordId)) {
+					for (const id of v) {
+						const r = await recordRef(String(id).trim());
+						pRefs.push({ label: `${k}[*] → ${r.label}`, href: r.href });
+					}
+				} else if (isRecordId(v)) {
 					const r = await recordRef(String(v).trim());
 					pRefs.push({ label: `${k} → ${r.label}`, href: r.href });
 				} else if (v && typeof v === 'object') {
@@ -154,12 +159,18 @@
 						pushRef(refs, await tableRef(subName, 'ТЧ → '));
 					}
 				}
-				// Ссылки на параметры сценария вида ${kontragent} (если значение — id записи)
+				// Ссылки на параметры сценария вида ${kontragent(s)} (если значение — id записи
+				// или массив id)
 				const tokens: string[] = [];
 				scanTokens(np, tokens);
 				for (const key of tokens) {
 					const pv = paramsObj[key];
-					if (pv && isRecordId(pv)) {
+					if (Array.isArray(pv) && pv.every(isRecordId)) {
+						for (const id of pv) {
+							const r = await recordRef(String(id).trim());
+							pushRef(refs, { label: `${key}[*] → ${r.label}`, href: r.href });
+						}
+					} else if (pv && isRecordId(pv)) {
 						const r = await recordRef(String(pv).trim());
 						pushRef(refs, { label: `${key} → ${r.label}`, href: r.href });
 					}

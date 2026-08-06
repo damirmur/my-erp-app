@@ -112,6 +112,7 @@ Irreversible delete used by `delete` and `purgeMarked` actions:
 1. `DELETE data_lines` (`.in('record_id')`) and `data_records` (`.in('id')`) on Supabase
 2. Single Dexie transaction: `bulkDelete` records + delete their lines
 3. Related form tabs are closed via `workspace.closeTabForce(tabId)`
+4. Titles of the removed records (captured from the local cache **before** the delete) are written to the «История» change journal as `'delete'` events
 
 ### Read path (pull on interval)
 
@@ -176,13 +177,29 @@ Result type is `ResolvedLink` (discriminated union: `list` | `record` | `line` �
 - `DynamicForm` toolbar row → «🔗 Копировать ссылку на запись»
 - `TabularSection` → «🔗 Копировать ссылку строки» (on the selected row)
 
-### Action history («🕘 История»)
+### Action history («🕘 История» — change journal)
 
-History is a **real system table** (`meta_tables.name = 'history'`, `type = 'system'`, hidden from main-mode groups via `config.hiddenInMain`). It is seeded idempotently by `metadata.ensureSystemTables()` (Supabase + local IndexedDB cache) at app start (`+page.svelte`) and at the beginning of each `runFullSync` cycle, before `pullMetadata`.
+History is a **change journal** stored in a real system table (`meta_tables.name = 'history'`, `type = 'system'`, hidden from main-mode groups via `config.hiddenInMain`). It is seeded idempotently by `metadata.ensureSystemTables()` (Supabase + local IndexedDB cache) at app start (`+page.svelte`) and at the beginning of each `runFullSync` cycle, before `pullMetadata`. The «Событие» column is added to existing installs by the same idempotent seed (`ensureHistoryColumns` creates only missing columns).
 
-Each opened list/record/line is recorded as a `data_records` row of that table by `workspace.recordHistory(tableId, title, link)` (skips system tables themselves). Record shape: `data = { object_title, link, opened_at }`. Deduped by `link`, capped at 50 rows. Rows are ordinary records, so they sync to Supabase like any other data. `workspace.clearHistory()` removes them locally and on the server.
+Only **saves and deletes** are recorded — openings are deliberately not logged:
 
-The Sidebar «🕘 История» button (main mode) opens the table as a `DynamicList`. There, rows don't open a form: `DynamicList.openRecord` special-cases `type === 'system'` and reopens the linked object via `record.data.link` → `workspace.openFromLink()`. The list sorts by `opened_at` descending by default.
+- `DynamicForm.saveToDb` → `workspace.recordHistory(tableId, title, buildRecordUrl(recordId), 'save', targetStatus)` (fires on save, posting and mark-for-deletion)
+- `saveRecordWithLines` (runCode `save()`, `src/lib/services/actionRunner.ts`) → `'save'`
+- `physicalDeleteRecords` (`src/lib/services/records.ts`) captures titles from the local cache **before** deletion, then writes `'delete'`
+
+Record shape: `data = { object_title, link, opened_at, event, event_type }` (`event` = «сохранение (статус)» / «удаление»; `event_type` = `save`/`delete`). Each operation is its own row (no dedup); system tables themselves are skipped. Capped at 50 rows (`HISTORY_LIMIT`). Rows are ordinary records, so they sync to Supabase like any other data. `workspace.clearHistory()` removes them locally and on the server.
+
+The Sidebar «🕘 История» button (main mode) opens the table as a `DynamicList`. Rows don't open a form: `DynamicList.openRecord` special-cases `type === 'system'` and reopens the linked object via `record.data.link` → `workspace.openFromLink()` (save rows reopen the object; delete rows point to a deleted object). The list sorts by `opened_at` descending by default.
+
+---
+
+## Main-mode sidebar
+
+Rendered by `src/lib/components/layout/Sidebar.svelte` (liveQuery-driven):
+
+- **«🔗 Открыть ссылку»** — paste `#/t/...`, `#/r/...`, `#/l/...` (or a bare record id) and press «Открыть»/Enter to open the object via `workspace.openFromLink()`; Esc closes the section, bare ids are normalized to `#/r/{id}`.
+- **Group & table ordering** — in Конструктор the «🔀 Порядок меню (основной режим)» panel moves groups (▲/▼ on the type list) and tables within a group; «Сохранить» persists to the system table `app_settings` (key `main_nav_order`) via `src/lib/state/settings.ts` (`saveNavOrder`), «Сброс» restores the default grouping, «Отмена» discards the draft. The main-mode list reads the order reactively (`loadNavOrder` + `liveQuery`); when unset the default is `preferredTypeOrder` plus `sort_order`/`number` within a group.
+- **«🕘 История»** — opens the «История» table as a `DynamicList` (see Action history above).
 
 ---
 

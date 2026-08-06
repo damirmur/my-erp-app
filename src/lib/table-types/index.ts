@@ -11,6 +11,7 @@ import template from './template';
 import constant from './constant';
 import tabular from './tabular';
 import system from './system';
+import flow from './flow';
 
 export type { TableTypeModule, StatusDef, ActionDef };
 export type { TableConfig };
@@ -23,7 +24,8 @@ const builtinRegistry: Record<string, TableTypeModule> = {
 	template,
 	constant,
 	tabular,
-	system
+	system,
+	flow
 };
 const defaultType = document;
 

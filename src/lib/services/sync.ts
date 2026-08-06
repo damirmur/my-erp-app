@@ -3,6 +3,7 @@ import { db, type LocalRecord, type LocalLine } from '$lib/db/indexeddb';
 import { metadata } from '$lib/state/metadata';
 import { seedNotificationDefaults } from '$lib/state/notifications';
 import { seedApiQueryDefaults } from '$lib/state/apiQueries';
+import { seedFlowExample } from '$lib/state/flows';
 
 // Ключ в localStorage: максимальная серверная updated_at из последнего pull.
 // Не зависит от локальных записей, поэтому сиды/история не могут сдвинуть
@@ -266,6 +267,7 @@ export const syncService = {
 			// серверные записи (получатели, сообщения) не попадут в кэш.
 			await seedNotificationDefaults();
 			await seedApiQueryDefaults();
+			await seedFlowExample();
 			console.log('Синхронизация завершена.');
 		} finally {
 			running = false;

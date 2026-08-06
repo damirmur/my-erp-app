@@ -5,6 +5,7 @@
 	import { syncService } from '$lib/services/sync';
 	import { fieldTypeList, fieldTypeLabel } from '$lib/fields';
 	import LinkConfig from '$lib/fields/LinkConfig.svelte';
+	import LinelinkConfig from '$lib/fields/LinelinkConfig.svelte';
 	import { liveQuery } from 'dexie';
 	import {
 		getTableType,
@@ -690,6 +691,9 @@
 						{#if newColType === 'link'}
 							<LinkConfig bind:relatedTableId={newColRelatedTableId} {allTables} />
 						{/if}
+						{#if newColType === 'linelink'}
+							<LinelinkConfig bind:relatedTableId={newColRelatedTableId} {allTables} />
+						{/if}
 						<button onclick={() => handleAddOrUpdateColumn('main')} class="btn-blue">
 							{editingKey === 'main' ? 'Применить' : '➕ Добавить в шапку'}
 						</button>
@@ -879,6 +883,9 @@
 								</select>
 								{#if newColType === 'link'}
 									<LinkConfig bind:relatedTableId={newColRelatedTableId} {allTables} />
+								{/if}
+								{#if newColType === 'linelink'}
+									<LinelinkConfig bind:relatedTableId={newColRelatedTableId} {allTables} />
 								{/if}
 								<button onclick={() => handleAddOrUpdateColumn(sub.key)} class="btn-blue">
 									{editingKey === sub.key ? 'Применить' : '➕ Добавить в ТЧ'}

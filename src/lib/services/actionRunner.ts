@@ -2,9 +2,12 @@ import { db, type LocalLine, type LocalRecord } from '$lib/db/indexeddb';
 import { supabase } from '$lib/db/supabase';
 import { buildRecordUrl, linkApi } from '$lib/services/deeplink';
 import { workspace } from '$lib/state/workspace.svelte';
+import { flowHelper } from '$lib/services/flowRunner';
 
 // Контекст, передаваемый в пользовательский код действия «Выполнить».
-// Доступно из кода: record, records, lines, params, db, supabase, save(), log(), link, apiCall(), run().
+// Доступно из кода: record, records, lines, params, db, supabase, save(), log(),
+// link, apiCall(), run(), flow(). В узлах сценария дополнительно:
+// input (результат предыдущего узла), inputs (все входы по ролям).
 export interface RunActionContext {
 	record: LocalRecord | null; // Текущая запись (в форме — открытая; в списке — первая выбранная)
 	records: LocalRecord[]; // Выбранные записи (в форме — [record])
@@ -17,11 +20,15 @@ export interface RunActionContext {
 	link: typeof linkApi; // Генерация уникальных ссылок и получение значений по ним
 	apiCall: typeof apiCall; // Вызов внешнего API по записи справочника «Сервисы API»
 	run: (tableName: string, recordId: string) => Promise<unknown>; // Выполнить код действия другой таблицы
+	input?: unknown; // В узлах сценария: результат предшествующего узла (роль flow/input)
+	inputs?: Record<string, unknown>; // В узлах сценария: все входы по ролям связей
+	flow?: (recordId: string, params?: Record<string, any>) => Promise<unknown>; // Выполнить сценарий
 }
 
 // Выполнение JS-кода действия в браузере. Код — тело async-функции.
-// Переменные контекста (record, records, lines, params, db, supabase, save, log, link, apiCall, run)
-// доступны в коде как локальные имена без префикса ctx.
+// Переменные контекста (record, records, lines, params, db, supabase, save,
+// log, link, apiCall, run, flow, input, inputs) доступны в коде как локальные
+// имена без префикса ctx.
 export async function runActionCode(code: string, ctx: RunActionContext): Promise<unknown> {
 	const paramNames = [
 		'record',
@@ -34,7 +41,10 @@ export async function runActionCode(code: string, ctx: RunActionContext): Promis
 		'log',
 		'link',
 		'apiCall',
-		'run'
+		'run',
+		'flow',
+		'input',
+		'inputs'
 	];
 	const values = paramNames.map((k) => (ctx as unknown as Record<string, unknown>)[k]);
 	const fn = new Function(...paramNames, `return (async () => {\n${code}\n})();`);
@@ -79,7 +89,8 @@ export async function runAnotherTable(tableName: string, recordId: string): Prom
 		log: (...args) => console.log('[Выполнить]', ...args),
 		link: linkApi,
 		apiCall,
-		run: runAnotherTable
+		run: runAnotherTable,
+		flow: flowHelper
 	});
 }
 
@@ -106,6 +117,14 @@ export async function runRecordAction(
 		if (!table) return { ok: false, error: 'Таблица записи не найдена' };
 		// Слияние дефолтов записи (jsonb «Параметры») с параметрами вызова
 		params = mergeParams(record, params);
+
+		// Тип «Сценарий» (flow): граф из ТЧ «Узлы»/«Связи» исполняется движком
+		// flowRunner даже если у таблицы не задан свой runCode (см. сид flows.ts).
+		if (table.type === 'flow' && !table.config?.runCode?.trim()) {
+			const value = await flowHelper(record.id, params);
+			return { ok: true, value };
+		}
+
 		const code = table.config?.runCode;
 		if (!code?.trim()) {
 			// Декларативный режим без кода действия:
@@ -150,7 +169,8 @@ export async function runRecordAction(
 			log: (...args) => console.log('[Выполнить API]', ...args),
 			link: linkApi,
 			apiCall,
-			run: runAnotherTable
+			run: runAnotherTable,
+			flow: flowHelper
 		});
 		return { ok: true, value };
 	} catch (e: any) {

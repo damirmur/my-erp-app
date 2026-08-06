@@ -13,7 +13,7 @@
 	} from '$lib/state/settings';
 
 	// Порядок встроенных групп в сайдбаре; кастомные типы идут после
-	const preferredTypeOrder = ['directory', 'document', 'register', 'constant', 'system'];
+	const preferredTypeOrder = ['directory', 'document', 'register', 'constant', 'flow', 'system'];
 
 	// Заголовки групп встроенных типов (множественное число)
 	const groupTitles: Record<string, string> = {
@@ -21,6 +21,7 @@
 		document: '📄 Документы',
 		register: '📊 Регистры',
 		constant: '🏷️ Константы',
+		flow: '🔀 Сценарии',
 		system: '⚙️ Системные'
 	};
 

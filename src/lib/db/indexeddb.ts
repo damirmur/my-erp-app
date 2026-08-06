@@ -40,7 +40,9 @@ export interface LocalColumn {
 		| 'parent_link'
 		| 'file'
 		| 'zip'
-		| 'universal';
+		| 'universal'
+		| 'linelink'
+		| 'select';
 	related_table_id?: string;
 	related_table_name?: string;
 	sort_order: number;

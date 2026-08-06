@@ -11,6 +11,8 @@ import jsonbField from './jsonb';
 import fileField from './file';
 import zipField from './zip';
 import universalField from './universal';
+import linelinkField from './linelink';
+import selectField from './select';
 
 export type { FieldTypeModule } from './field';
 
@@ -26,7 +28,9 @@ export const fieldRegistry: Record<string, FieldTypeModule> = {
 	jsonb: jsonbField,
 	file: fileField,
 	zip: zipField,
-	universal: universalField
+	universal: universalField,
+	linelink: linelinkField,
+	select: selectField
 };
 
 export const fieldTypeList: FieldTypeModule[] = Object.values(fieldRegistry);
@@ -70,6 +74,9 @@ export function formatFieldValue(type: string, raw: any): string {
 		if (raw.place) parts.push(raw.place);
 		return parts.join(' · ');
 	}
+	if (type === 'link' && typeof raw === 'string') return String(raw);
+	if (type === 'linelink') return String(raw);
+	if (type === 'select') return String(raw);
 	if (typeof raw === 'object') return JSON.stringify(raw);
 	if (type === 'textarea') return String(raw).replace(/\s+/g, ' ').trim();
 	return String(raw);

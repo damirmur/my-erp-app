@@ -6,6 +6,7 @@ import { ensureSchedulerTables } from '$lib/state/scheduler';
 import { ensureSettingsTable } from '$lib/state/settings';
 import { ensureApiQueryTables } from '$lib/state/apiQueries';
 import { ensureConstantsTable } from '$lib/state/constants';
+import { ensureFlowTables } from '$lib/state/flows';
 
 // Имя системной таблицы-истории действий. Уникально в meta_tables, используется
 // для поиска таблицы и в recordHistory/clearHistory/сайдбаре.
@@ -147,6 +148,10 @@ class MetadataManager {
 		// Таблица «Константы»: одна таблица на все константы (много записей,
 		// универсальное поле «Значение», периодичность через ТЧ «Периоды»).
 		await ensureConstantsTable();
+
+		// Таблица «Сценарии» (тип flow): граф как в n8n — узлы и связи в ТЧ,
+		// исполнение через движок flowRunner (кнопка «▶️ Выполнить»).
+		await ensureFlowTables();
 
 		// Таблица настроек приложения (порядок меню основного режима и т.п.).
 		await ensureSettingsTable();

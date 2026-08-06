@@ -160,12 +160,25 @@
 
 	// Для link-колонок значение в данных — id записи; в ячейках списка показываем
 	// наименование связанной записи (прекомпьютим мапу id → name текущих строк).
+	// Для linelink-колонок id указывает на строку ТЧ (data_lines) — её заголовок
+	// берём из данных строки.
 	let linkDisplay = $state<Record<string, string>>({});
+
+	function lineTitle(line: { data?: Record<string, any> } | undefined): string {
+		const d = line?.data ?? {};
+		if (d.name != null && String(d.name) !== '') return String(d.name);
+		if (d.number != null && String(d.number) !== '') return String(d.number);
+		for (const v of Object.values(d)) {
+			if (v != null && String(v) !== '') return String(v);
+		}
+		return '…';
+	}
 
 	$effect(() => {
 		const linkCols = columns.filter(
 			(c) =>
 				c.type === 'link' ||
+				c.type === 'linelink' ||
 				(c.type === 'universal' && records.some((r) => r.data?.[c.name]?.t === 'link'))
 		);
 		if (linkCols.length === 0) {
@@ -173,9 +186,14 @@
 			return;
 		}
 		const ids = new Set<string>();
+		const lineIds = new Set<string>();
 		for (const col of linkCols) {
 			for (const r of filteredAndSortedRecords) {
 				const v = r.data?.[col.name];
+				if (col.type === 'linelink') {
+					if (v && typeof v === 'string') lineIds.add(v);
+					continue;
+				}
 				const id = col.type === 'link' ? v : v?.t === 'link' ? v?.v : null;
 				if (id && typeof id === 'string') ids.add(id);
 			}
@@ -186,6 +204,7 @@
 			.then((rows) => {
 				const map: Record<string, string> = {};
 				for (const col of linkCols) {
+					if (col.type === 'linelink') continue;
 					for (const r of filteredAndSortedRecords) {
 						const v = r.data?.[col.name];
 						const id = col.type === 'link' ? v : v?.t === 'link' ? v?.v : null;
@@ -196,6 +215,24 @@
 				linkDisplay = map;
 			})
 			.catch(() => {});
+		if (lineIds.size > 0) {
+			const lineIdArr = [...lineIds];
+			db.data_lines
+				.bulkGet(lineIdArr)
+				.then((lines) => {
+					const map: Record<string, string> = {};
+					for (const col of linkCols) {
+						if (col.type !== 'linelink') continue;
+						for (const r of filteredAndSortedRecords) {
+							const id = r.data?.[col.name];
+							if (!id || typeof id !== 'string') continue;
+							map[`${col.id}:${id}`] = lineTitle(lines.find((l) => l?.id === id));
+						}
+					}
+					linkDisplay = { ...linkDisplay, ...map };
+				})
+				.catch(() => {});
+		}
 	});
 
 	async function handleAction(actionId: string) {
@@ -440,6 +477,10 @@
 		}
 		// Ссылка хранит id записи — показываем наименование связанной записи
 		if (col.type === 'link' && raw) {
+			return linkDisplay[`${col.id}:${raw}`] ?? String(raw);
+		}
+		// Ссылка на строку ТЧ: значение — id строки data_lines
+		if (col.type === 'linelink' && raw) {
 			return linkDisplay[`${col.id}:${raw}`] ?? String(raw);
 		}
 		// Универсальное поле: если в записи выбран тип «Ссылка» — то же поведение

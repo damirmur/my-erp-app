@@ -2,6 +2,7 @@
 	import { db, type LocalLine, type LocalColumn, type LocalRecord } from '$lib/db/indexeddb';
 	import { fieldRegistry } from '$lib/fields';
 	import { defaultBirth } from '$lib/fields/birth';
+	import { selectOptionsFor } from '$lib/services/flowElements';
 	import { buildLineUrl, fullUrlFor } from '$lib/services/deeplink';
 	import './erpTable.css';
 	let {
@@ -9,6 +10,9 @@
 		onChange = null,
 		readOnly = false,
 		tableId = '',
+		tableName = '',
+		recordId = '',
+		linelinkCandidates = null,
 		focusLineId = ''
 	} = $props();
 	let selectedLineId = $state<string | null>(null);
@@ -51,14 +55,35 @@
 	function defaultLineData(): Record<string, unknown> {
 		const data: Record<string, unknown> = {};
 		for (const col of columns) {
-			if (col.type === 'boolean') data[col.name] = false;
-			else if (col.type === 'birth') data[col.name] = defaultBirth();
-			else if (col.type === 'number') data[col.name] = 0;
-			else if (col.type === 'universal') data[col.name] = { t: 'string', v: '' };
-			else data[col.name] = '';
+			data[col.name] = defaultFor(col.type);
 		}
 		return data;
 	}
+
+	// Значение колонки по умолчанию (для новых строк и нормализации загруженных)
+	function defaultFor(type: string): unknown {
+		if (type === 'boolean') return false;
+		if (type === 'birth') return defaultBirth();
+		if (type === 'number') return 0;
+		if (type === 'universal') return { t: 'string', v: '' };
+		return '';
+	}
+
+	// Строки, загруженные из БД, могут не содержать всех колонок (например,
+	// колонку добавили позже). Заполняем недостающие ключи значениями по
+	// умолчанию ДО рендера ($effect.pre) — иначе bind:value={undefined} ломает
+	// поля с fallback (props_invalid_value).
+	$effect.pre(() => {
+		if (columns.length === 0) return;
+		for (const line of lines) {
+			if (!line || !line.data) continue;
+			for (const col of columns) {
+				if (line.data[col.name] === undefined) {
+					line.data[col.name] = defaultFor(col.type);
+				}
+			}
+		}
+	});
 
 	function addLine() {
 		lines.push({
@@ -159,6 +184,11 @@
 										disabled={readOnly || (hasAmountAuto && col.name === 'amount')}
 										onChange={(arg: any) => cellChange(col, line, arg)}
 										relatedTableId={col.related_table_id ?? ''}
+										{recordId}
+										candidates={col.type === 'linelink' ? linelinkCandidates : undefined}
+										options={col.type === 'select'
+											? selectOptionsFor(tableName, col.name)
+											: undefined}
 									/>
 								{:else}
 									{String(line.data[col.name] ?? '')}

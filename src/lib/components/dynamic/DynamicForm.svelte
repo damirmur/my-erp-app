@@ -8,6 +8,7 @@
 	import { isReadOnly, findParentColumn } from '$lib/table-types';
 	import { fieldRegistry } from '$lib/fields';
 	import { isValidBirthLocal, defaultBirth } from '$lib/fields/birth';
+	import { selectOptionsFor } from '$lib/services/flowElements';
 	import { buildExecuteUrl, buildRecordUrl, fullUrlFor } from '$lib/services/deeplink';
 	import Toolbar from './Toolbar.svelte';
 	import TabularSection from './TabularSection.svelte';
@@ -42,6 +43,17 @@
 	let mainColType = $derived(mainValueCol?.type ?? columns[0]?.type ?? 'string');
 
 	let activeSubTable = $derived(objectSubTables[activeSubTabIndex]);
+
+	// Строки ТЧ «Узлы» (flow_nodes) из памяти формы — кандидаты для полей
+	// «Ссылка на строку ТЧ» (from_node/to_node), чтобы связи можно было строить
+	// до первого сохранения сценария. activeSubTabIndex — реактивный триггер:
+	// backup обновляется при переключении вкладок (backupActiveLines).
+	let nodeLineCandidates = $derived.by(() => {
+		activeSubTabIndex; // триггер пересчёта при смене вкладки
+		const nodesSub = objectSubTables.find((t) => t.name === 'flow_nodes');
+		if (!nodesSub) return null;
+		return subTableBackup[nodesSub.id] ?? null;
+	});
 
 	// ---- sub-table lines ----
 	// activeSubTableLines is the single $state array for the currently active sub-table.
@@ -519,6 +531,11 @@
 								disabled={readOnly || (isPeriodic && col.name === mainColName && hasPeriodLines)}
 								onChange={markAsDirty}
 								relatedTableId={col.related_table_id ?? ''}
+								{recordId}
+								candidates={col.type === 'linelink' ? nodeLineCandidates : undefined}
+								options={col.type === 'select'
+									? selectOptionsFor(tableMeta?.name ?? '', col.name)
+									: undefined}
 							/>
 						{/if}
 					</div>
@@ -553,6 +570,9 @@
 									onChange={markAsDirty}
 									{readOnly}
 									tableId={activeSubTable.id}
+									tableName={activeSubTable.name ?? ''}
+									{recordId}
+									linelinkCandidates={nodeLineCandidates}
 									{focusLineId}
 								/>
 							{/if}

@@ -31,7 +31,7 @@ my-erp-app/
 │       │   ├── actionRunner.ts     # «Выполнить»: executes user JS code (config.runCode) in browser
 │       │   ├── deeplink.ts         # Unique hash links (#/t/, #/r/, #/l/) — parse/build/resolve values
 │       │   ├── printer.ts          # HTML template batch printing
-│       │   └── numbers.ts          # Auto-numbering (prefix + padded digits)
+│       │   └── numbers.ts          # Auto-fill date/number on save (year-scoped, strip non-digits)
 │       ├── state/
 │       │   ├── metadata.ts         # CRUD meta_tables/meta_columns via Supabase (+ setColumnVisibility)
 │       │   ├── notifications.ts    # Seed + migration: «Сервисы API», каналы, получатели, «Сообщение» (NOTIFY_RUN_CODE)

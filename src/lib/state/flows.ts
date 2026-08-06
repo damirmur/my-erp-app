@@ -34,6 +34,13 @@ function scenarioColumns(): Omit<LocalColumn, 'id' | 'table_id'>[] {
 			type: 'textarea',
 			sort_order: 30,
 			is_visible: false
+		},
+		{
+			name: 'params',
+			title: 'Параметры (JSON)',
+			type: 'jsonb',
+			sort_order: 40,
+			is_visible: true
 		}
 	];
 }

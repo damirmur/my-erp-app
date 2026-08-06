@@ -86,6 +86,15 @@ function subContext(input: unknown, scenarioParams: Record<string, any>): Record
 	return ctx;
 }
 
+// Ограничение времени ожидания запроса: офлайн-запуск сценария не должен висеть
+// на fetch к недоступному серверу дольше заданного лимита.
+function withTimeout<T>(prom: PromiseLike<T>, ms: number): Promise<T> {
+	return Promise.race([
+		Promise.resolve(prom),
+		new Promise<never>((_, rej) => setTimeout(() => rej(new Error(`таймаут (${ms} мс)`)), ms))
+	]);
+}
+
 // Значение константы: универсальное поле хранит { t, v } — отдаём v
 function unwrapUniversal(v: unknown): unknown {
 	if (v && typeof v === 'object' && typeof (v as any).t === 'string') return (v as any).v;
@@ -173,9 +182,13 @@ async function elementFind({ input, params, scenarioParams }: FlowElementInput):
 	if (!tableName) throw new Error('Узел «Найти запись»: укажите table');
 	const table = await db.meta_tables.where('name').equals(tableName).first();
 	if (!table) throw new Error(`Узел «Найти запись»: нет таблицы «${tableName}»`);
+	const tableId = table.id;
+	const parentTableId = table.parent_table_id;
 	const where = p.where && typeof p.where === 'object' && !Array.isArray(p.where) ? p.where : {};
-	// Строки ТЧ (parent_table_id задан) ищем в data_lines, иначе — в data_records
-	const isLine = !!(table.parent_table_id || p.line === true);
+	// Строки ТЧ (parent_table_id задан) ищем в data_lines, иначе — в data_records.
+	// Ищем в обеих сразу: локальный кэш метаданных может отставать (parent_table_id
+	// ещё не подтянут), тогда строки ТЧ лежат только в data_lines.
+	const isLine = !!(parentTableId || p.line === true);
 
 	function matches(row: any): boolean {
 		for (const [k, v] of Object.entries(where)) {
@@ -185,53 +198,69 @@ async function elementFind({ input, params, scenarioParams }: FlowElementInput):
 		return true;
 	}
 
-	// 1. Локальный кэш (offline-first)
-	let rows: any[] = isLine
-		? await db.data_lines.where('table_id').equals(table.id).toArray()
-		: await db.data_records.where('table_id').equals(table.id).toArray();
-	let match = rows.find((row) => matches(row));
+	async function searchLocal(): Promise<any> {
+		const [lineRows, recordRows] = await Promise.all([
+			db.data_lines.where('table_id').equals(tableId).toArray(),
+			db.data_records.where('table_id').equals(tableId).toArray()
+		]);
+		return [...lineRows, ...recordRows].find((row) => matches(row));
+	}
 
-	// 2. Fallback на сервер: если онлайн и локально пусто/не найдено — ищем
-	// напрямую в Supabase. Строки ТЧ живут в data_lines с table_id = id
-	// подчинённой таблицы. Id таблицы берём с сервера по name (авторитетный),
-	// т.к. локальный кэш метаданных может отставать.
-	if (!match && (typeof navigator === 'undefined' || navigator.onLine)) {
-		try {
-			const serverTable = await supabase
-				.from('meta_tables')
-				.select('id,parent_table_id')
-				.eq('name', tableName)
-				.maybeSingle();
-			const sid = serverTable.data?.id ?? table.id;
-			const serverIsLine = !!(serverTable.data?.parent_table_id || p.line === true);
-			const src = serverIsLine ? 'data_lines' : tableName;
-			const q = supabase.from(src).select('*').limit(1000);
-			if (serverIsLine) q.eq('table_id', sid);
-			const { data, error } = await q;
-			const serverRows: any[] = data ?? [];
-			if (!error && serverRows.length > 0) {
-				const candidates = serverRows.map((r: any) => ({
-					id: r.id,
-					record_id: r.record_id ?? null,
-					data: r.data ?? {}
-				}));
-				match = candidates.find((row) => matches(row));
-			}
-			// Найденные строки доливаем в локальный кэш, чтобы последующие узлы
-			// (например, «Отправить» → NOTIFY_RUN_CODE) видели контакты.
-			if (match && serverIsLine) {
-				await db.data_lines.bulkPut(
-					serverRows.map((r: any) => ({
+	// 1. Локальный кэш (offline-first)
+	let match: any = await searchLocal();
+
+	// 2. Fallback на сервер: если локально не найдено и мы онлайн — ищем напрямую
+	// в Supabase. Короткая пауза перед запросом даёт шанс текущему синку докачать
+	// только что изменённые строки (иначе локальный поиск мог опередить pull).
+	// Строки ТЧ живут в data_lines с table_id = id подчинённой таблицы; id таблицы
+	// берём с сервера по name (авторитетный), т.к. локальный кэш может отставать.
+	if (!match) {
+		const online = typeof navigator === 'undefined' || navigator.onLine;
+		if (typeof window !== 'undefined') await new Promise((r) => setTimeout(r, 1200));
+		match = await searchLocal();
+		if (online) {
+			try {
+				const serverTable = await withTimeout(
+					supabase
+						.from('meta_tables')
+						.select('id,parent_table_id')
+						.eq('name', tableName)
+						.maybeSingle(),
+					8000
+				);
+				const sid = serverTable.data?.id ?? table.id;
+				const serverIsLine = !!(serverTable.data?.parent_table_id || p.line === true);
+				const src = serverIsLine ? 'data_lines' : tableName;
+				const q = supabase.from(src).select('*').limit(1000);
+				if (serverIsLine) q.eq('table_id', sid);
+				const { data, error } = await withTimeout(q, 8000);
+				const serverRows: any[] = data ?? [];
+				if (error) {
+					console.warn(`Узел «Найти запись»: запрос к серверу не удался (${error.message})`);
+				} else if (serverRows.length > 0) {
+					const candidates = serverRows.map((r: any) => ({
 						id: r.id,
 						record_id: r.record_id ?? null,
-						table_id: r.table_id ?? sid,
-						data: r.data ?? {},
-						sort_order: r.sort_order ?? 0
-					}))
-				);
+						data: r.data ?? {}
+					}));
+					match = candidates.find((row) => matches(row));
+				}
+				// Найденные строки доливаем в локальный кэш, чтобы последующие узлы
+				// (например, «Отправить» → NOTIFY_RUN_CODE) видели контакты.
+				if (match && serverIsLine) {
+					await db.data_lines.bulkPut(
+						serverRows.map((r: any) => ({
+							id: r.id,
+							record_id: r.record_id ?? null,
+							table_id: r.table_id ?? sid,
+							data: r.data ?? {},
+							sort_order: r.sort_order ?? 0
+						}))
+					);
+				}
+			} catch (e) {
+				console.warn('Узел «Найти запись»: сервер недоступен, работаю по локальному кэшу', e);
 			}
-		} catch {
-			// сервер недоступен — оставляем локальный результат
 		}
 	}
 

@@ -77,9 +77,10 @@
 		const all = lines;
 		const my = ++token;
 		void (async () => {
-			// Параметры сценария
+			// Параметры сценария (служебный ключ __meta с типом/таблицей — не показываем)
 			const pRefs: Ref[] = [];
 			for (const [k, v] of Object.entries(paramsObj)) {
+				if (k === '__meta') continue;
 				if (Array.isArray(v) && v.every(isRecordId)) {
 					for (const id of v) {
 						const r = await recordRef(String(id).trim());

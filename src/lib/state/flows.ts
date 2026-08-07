@@ -123,6 +123,9 @@ export const FORECAST_TEXT_CODE = [
 	"return lines.join('\\n');"
 ].join('\n');
 
+// Колонки сценария: params — визуальный редактор «Параметры (список)»: объект
+// { ключ: [id, ...] } (например, { kontragents: [uuid, ...] }). Значения —
+// ссылки на записи любых таблиц (универсальный поиск, см. paramslist).
 function scenarioColumns(): Omit<LocalColumn, 'id' | 'table_id'>[] {
 	return [
 		{ name: 'number', title: 'Код', type: 'string', sort_order: 10, is_visible: true },
@@ -136,8 +139,8 @@ function scenarioColumns(): Omit<LocalColumn, 'id' | 'table_id'>[] {
 		},
 		{
 			name: 'params',
-			title: 'Параметры (JSON)',
-			type: 'jsonb',
+			title: 'Параметры',
+			type: 'paramslist',
 			sort_order: 40,
 			is_visible: true
 		}
@@ -256,6 +259,27 @@ async function upgradeNodeTypeColumn(nodesId: string, online: boolean): Promise<
 	await db.meta_columns.put({ ...col, type: 'select' });
 }
 
+// Перевод колонки params сценария с jsonb на визуальный редактор «Параметры
+// (список)» у уже созданных установок (идемпотентно). Ссылки-значения ищутся
+// по всем таблицам (универсальный поиск), поэтому related_table_id не ставим.
+async function upgradeScenarioParamsColumn(scenarioId: string, online: boolean): Promise<void> {
+	const col = await db.meta_columns
+		.where('table_id')
+		.equals(scenarioId)
+		.filter((c) => c.name === 'params')
+		.first();
+	if (!col || col.type === 'paramslist') return;
+
+	if (online) {
+		try {
+			await supabase.from('meta_columns').update({ type: 'paramslist' }).eq('id', col.id);
+		} catch {
+			// сервер недоступен — достаточно локального обновления
+		}
+	}
+	await db.meta_columns.put({ ...col, type: 'paramslist' });
+}
+
 // Идемпотентное создание таблиц модуля «Сценарии». Вызывается из
 // metadata.ensureSystemTables() — после ensureApiQueryTables (для ссылки на
 // каталог «Сервисы API»).
@@ -278,6 +302,9 @@ export async function ensureFlowTables(): Promise<void> {
 	});
 	if (!scenarioId) return;
 	await ensureColumns(scenarioId, scenarioColumns(), online);
+	// Старые установки: колонка params была jsonb — переводим на визуальный
+	// редактор «Параметры (список)».
+	await upgradeScenarioParamsColumn(scenarioId, online);
 
 	// ТЧ «Узлы»: строки = узлы графа.
 	const nodesId = await ensureTable(FLOW_NODES_TABLE, 'Узлы', 'tabular', {}, scenarioId);
@@ -464,19 +491,35 @@ async function seedFlowElements(online: boolean, wttrId: string): Promise<Map<st
 	const nameToId = new Map<string, string>();
 
 	const defs: Array<Record<string, any>> = [
-		{ name: 'Константа города', element_type: 'constant', params: { name: 'city' } },
-		{ name: 'Извлечь город', element_type: 'get', params: { path: 'city' } },
+		{
+			name: 'Константа города',
+			element_type: 'constant',
+			params: { name: 'city' },
+			description:
+				'Вход: не использует.\nКак работает: находит в таблице «Константы» запись с именем из параметра name (по умолчанию «city») и возвращает её значение.\nВыход: значение константы (строка, число или объект — зависит от типа константы).'
+		},
+		{
+			name: 'Извлечь город',
+			element_type: 'get',
+			params: { path: 'city' },
+			description:
+				'Вход: результат предыдущего узла (объект/JSON).\nКак работает: извлекает из входа значение по точечному пути path (например «city» или «current.temp_c»). Если вход не объект или путь не найден — возвращает вход без изменений.\nВыход: значение по пути из входа.'
+		},
 		{
 			name: 'Погода (wttr.in)',
 			element_type: 'api',
 			service: wttrId,
-			params: { city: '${input}', format: 'j1', lang: 'ru' }
+			params: { city: '${input}', format: 'j1', lang: 'ru' },
+			description:
+				'Вход: результат предыдущего узла — подставляется в параметры через ${input} (например, город).\nКак работает: вызывает внешний сервис (wttr.in) по записи «Сервис API»; в параметрах можно ссылаться на контекст сценария через ${...}.\nВыход: ответ API — JSON (объект погоды wttr.in).'
 		},
 		{
 			name: 'Текст прогноза',
 			element_type: 'code',
 			code: FORECAST_TEXT_CODE,
 			params: {},
+			description:
+				'Вход: результат предыдущего узла (JSON погоды wttr.in).\nКак работает: выполняет JS-код узла, который строит человекочитаемый текст прогноза: текущая погода, почасовой прогноз на день, прогноз на несколько дней, рассвет/закат.\nВыход: строка текста прогноза.',
 			// Старый заводской конфиг (однострочный шаблон) — обновляем до кода,
 			// пока элемент не редактировали вручную.
 			legacy: {
@@ -497,6 +540,8 @@ async function seedFlowElements(online: boolean, wttrId: string): Promise<Map<st
 				all: true,
 				map: { kontragent: 'record_id', channel: 'channel' }
 			},
+			description:
+				'Вход: не обязателен; параметры сценария ${kontragents} (массив UUID контрагентов).\nКак работает: ищет в таблице «contragent_contacts» (ТЧ контактов) строки, где record_id входит в список ${kontragents} и default = true. Значения where-массивы трактуются как «in». all=true возвращает ВСЕ совпадения массивом. map перекладывает поля: { kontragent: record_id, channel: channel }. Ищет сначала локально (IndexedDB), затем на сервере.\nВыход: массив строк-получателей { kontragent, channel }.',
 			// Старый заводской конфиг (все контакты без фильтра default) — обновляем,
 			// пока элемент не редактировали вручную.
 			legacy: {
@@ -518,6 +563,8 @@ async function seedFlowElements(online: boolean, wttrId: string): Promise<Map<st
 				data: { subject: 'Прогноз погоды', message: '${Текст прогноза}' },
 				lines: { notify_message_channels: '${Контакты контрагентов}' }
 			},
+			description:
+				'Вход: не обязателен; данные берутся из контекста сценария через ${...} — ${Текст прогноза} (строка), ${Контакты контрагентов} (массив получателей).\nКак работает: создаёт запись в таблице «notify_messages» с полями data (subject, message) и строками ТЧ «notify_message_channels» из массива получателей.\nВыход: объект { id, ...data } — id созданного сообщения.',
 			// Старый заводской конфиг (одна строка получателя) — обновляем до нового
 			// (массив получателей из контекста), пока элемент не редактировали вручную.
 			legacy: {
@@ -535,7 +582,9 @@ async function seedFlowElements(online: boolean, wttrId: string): Promise<Map<st
 		{
 			name: 'Отправить сообщение',
 			element_type: 'run',
-			params: { table: 'notify_messages', record: '${id}' }
+			params: { table: 'notify_messages', record: '${id}' },
+			description:
+				'Вход: не обязателен; record подставляется из контекста (${id} — id созданного сообщения).\nКак работает: выполняет код действия таблицы «notify_messages» по указанной записи (NOTIFY_RUN_CODE — отправка сообщения получателям по каналам).\nВыход: результат действия (статусы отправки по каналам).'
 		}
 	];
 

@@ -31,7 +31,7 @@
 	let displayName = $state('');
 
 	$effect(() => {
-		if (isOpen || !value || !targetTableId) {
+		if (isOpen || !value) {
 			if (!isOpen) displayName = '';
 			return;
 		}

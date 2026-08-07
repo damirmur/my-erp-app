@@ -13,6 +13,7 @@ import zipField from './zip';
 import universalField from './universal';
 import linelinkField from './linelink';
 import selectField from './select';
+import paramslistField from './paramslist';
 
 export type { FieldTypeModule } from './field';
 
@@ -30,7 +31,8 @@ export const fieldRegistry: Record<string, FieldTypeModule> = {
 	zip: zipField,
 	universal: universalField,
 	linelink: linelinkField,
-	select: selectField
+	select: selectField,
+	paramslist: paramslistField
 };
 
 export const fieldTypeList: FieldTypeModule[] = Object.values(fieldRegistry);
@@ -77,6 +79,15 @@ export function formatFieldValue(type: string, raw: any): string {
 	if (type === 'link' && typeof raw === 'string') return String(raw);
 	if (type === 'linelink') return String(raw);
 	if (type === 'select') return String(raw);
+	if (type === 'paramslist' && raw && typeof raw === 'object') {
+		const parts = Object.entries(raw)
+			.filter(([k]) => k !== '__meta')
+			.map(([k, v]) => {
+				const n = Array.isArray(v) ? v.length : 1;
+				return `${k}: ${n}`;
+			});
+		return parts.join(' · ') || '∅';
+	}
 	if (typeof raw === 'object') return JSON.stringify(raw);
 	if (type === 'textarea') return String(raw).replace(/\s+/g, ' ').trim();
 	return String(raw);

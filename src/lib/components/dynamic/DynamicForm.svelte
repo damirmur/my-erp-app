@@ -40,7 +40,7 @@
 	let loading = $state(true);
 
 	// Типы полей, у которых метка всегда над полем (не помещаются в одну строку)
-	const wideFieldTypes = ['textarea', 'jsonb', 'file', 'zip', 'universal'];
+	const wideFieldTypes = ['textarea', 'jsonb', 'file', 'zip', 'universal', 'paramslist'];
 
 	let tableType = $derived(tableMeta?.type ?? 'document');
 	let tableConfig = $derived(tableMeta?.config ?? {});
@@ -294,10 +294,15 @@
 	async function saveToDb(targetStatus: string) {
 		// Валидация JSON-полей перед записью; храним разобранный объект (настоящий jsonb)
 		for (const col of columns) {
-			if (col.type !== 'jsonb') continue;
+			if (col.type !== 'jsonb' && col.type !== 'paramslist') continue;
 			const raw = recordData[col.name];
 			if (raw == null || String(raw).trim() === '') {
 				recordData[col.name] = null;
+				continue;
+			}
+			// paramslist: визуальный редактор уже держит значение объектом —
+			// строкой оно может быть только у старых записей (совместимость).
+			if (col.type === 'paramslist' && typeof raw === 'object' && !Array.isArray(raw)) {
 				continue;
 			}
 			try {

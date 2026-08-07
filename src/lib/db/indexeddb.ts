@@ -42,7 +42,8 @@ export interface LocalColumn {
 		| 'zip'
 		| 'universal'
 		| 'linelink'
-		| 'select';
+		| 'select'
+		| 'paramslist';
 	related_table_id?: string;
 	related_table_name?: string;
 	sort_order: number;

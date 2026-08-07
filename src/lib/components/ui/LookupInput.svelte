@@ -7,12 +7,16 @@
 		value = $bindable(''), // Теперь это поле официально разрешено для bind:value!
 		targetTableId = '',
 		onSelect = null,
-		disabled = false
+		disabled = false,
+		// Дополнительный фильтр кандидатов (например, для поля «Группа» — только
+		// папки без самого себя и потомков). Применяется после поиска по имени.
+		filter = null
 	} = $props<{
 		value: string;
 		targetTableId: string;
 		onSelect?: ((record: LocalRecord) => void) | null;
 		disabled?: boolean;
+		filter?: ((record: LocalRecord) => boolean) | null;
 	}>();
 
 	let searchQuery = $state('');
@@ -69,7 +73,9 @@
 
 			const q = searchQuery.toLowerCase();
 			return {
-				records: records.filter((r) => (r.data.name || '').toLowerCase().includes(q)),
+				records: records.filter(
+					(r) => (!filter || filter(r)) && (r.data.name || '').toLowerCase().includes(q)
+				),
 				titles
 			};
 		});

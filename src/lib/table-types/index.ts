@@ -1,7 +1,7 @@
 import type { TableTypeModule, StatusDef, ActionDef, ActionDefDB, TableTypeFeatures } from './type';
 import { FEATURE_KEYS } from './type';
 import { standardActionsFor } from './standardActions';
-import type { LocalColumn, LocalTable, TableConfig } from '$lib/db/indexeddb';
+import type { LocalTable, TableConfig } from '$lib/db/indexeddb';
 import { supabase } from '$lib/db/supabase';
 import { derived, get } from 'svelte/store';
 import { dynamicTypes } from './store';
@@ -90,12 +90,6 @@ export function isReadOnly(type: string, status: string, config?: Record<string,
 	const overrides = config?.statusReadOnly;
 	if (overrides?.[status] !== undefined) return overrides[status];
 	return getStatusDef(type, status)?.isReadOnly ?? false;
-}
-
-// Колонка-ссылка на саму таблицу («Родитель» в иерархических справочниках):
-// это и есть поле иерархии, задаваемое пользователем в форме.
-export function findParentColumn(columns: LocalColumn[], tableId: string): LocalColumn | undefined {
-	return columns.find((c) => c.type === 'link' && c.related_table_id === tableId);
 }
 
 export function getEffectiveConfig(

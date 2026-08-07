@@ -1,12 +1,14 @@
 <script lang="ts">
 	import { workspace } from '$lib/state/workspace.svelte';
 
-	let copied = $state(false);
+	// Какую кнопку скопировали («url» или «json») — независимый индикатор для
+	// каждой, чтобы клик по одной не подсвечивал вторую.
+	let copiedTarget = $state<'url' | 'json' | null>(null);
 
-	function handleCopyText(text: string) {
+	function handleCopyText(text: string, target: 'url' | 'json') {
 		navigator.clipboard.writeText(text).then(() => {
-			copied = true;
-			setTimeout(() => (copied = false), 1500);
+			copiedTarget = target;
+			setTimeout(() => (copiedTarget = null), 1500);
 		});
 	}
 </script>
@@ -27,8 +29,8 @@
 			{#if result.href}
 				<div class="api-url-row">
 					<input readonly value={result.href} class="api-url-input" />
-					<button class="api-copy-btn" onclick={() => handleCopyText(result.href)}>
-						{copied ? '✓ Скопировано' : 'Копировать URL'}
+					<button class="api-copy-btn" onclick={() => handleCopyText(result.href, 'url')}>
+						{copiedTarget === 'url' ? '✓ Скопировано' : 'Копировать URL'}
 					</button>
 				</div>
 			{/if}
@@ -69,9 +71,9 @@
 				<div class="api-actions">
 					<button
 						class="api-copy-btn"
-						onclick={() => handleCopyText(JSON.stringify(result.value, null, 2))}
+						onclick={() => handleCopyText(JSON.stringify(result.value, null, 2), 'json')}
 					>
-						{copied ? '✓ Скопировано' : 'Копировать JSON'}
+						{copiedTarget === 'json' ? '✓ Скопировано' : 'Копировать JSON'}
 					</button>
 				</div>
 			{/if}

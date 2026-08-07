@@ -5,7 +5,7 @@ const tabular: TableTypeModule = {
 	type: 'tabular',
 	label: 'Табличная часть',
 	statuses: [
-		{ value: 'draft', label: 'Черновик', icon: '⚪', badgeClass: 'status-draft', isReadOnly: false }
+		{ value: 'draft', label: 'Записан', icon: '⚪', badgeClass: 'status-draft', isReadOnly: false }
 	],
 	features: {
 		create: false,

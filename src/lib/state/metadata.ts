@@ -26,6 +26,13 @@ const HISTORY_COLUMNS: Omit<LocalColumn, 'id' | 'table_id'>[] = [
 		type: 'string',
 		sort_order: 4,
 		is_visible: true
+	},
+	{
+		name: 'description',
+		title: 'Описание',
+		type: 'string',
+		sort_order: 5,
+		is_visible: true
 	}
 ];
 

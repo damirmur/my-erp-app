@@ -112,12 +112,18 @@ export interface RunRecordResult {
 	value?: unknown;
 	error?: string;
 	steps?: FlowStep[];
+	// Признак выполнения сценария (тип таблицы 'flow'): результат всегда пишется
+	// в историю, а панель «API» открывается только при ошибке (см. workspace).
+	isFlow?: boolean;
 }
 
 export async function runRecordAction(
 	recordId: string,
 	params: Record<string, any> = {}
 ): Promise<RunRecordResult> {
+	// isFlow известен только после загрузки таблицы, но нужен и в catch (ошибка
+	// сценария тоже должна попасть в историю) — поэтому выносим наружу.
+	let isFlow = false;
 	try {
 		const record = await db.data_records.get(recordId);
 		if (!record) return { ok: false, error: 'Запись не найдена: ' + recordId };
@@ -125,12 +131,13 @@ export async function runRecordAction(
 		if (!table) return { ok: false, error: 'Таблица записи не найдена' };
 		// Слияние дефолтов записи (jsonb «Параметры») с параметрами вызова
 		params = mergeParams(record, params);
+		isFlow = table.type === 'flow';
 
 		// Тип «Сценарий» (flow): граф из ТЧ «Узлы»/«Связи» исполняется движком
 		// flowRunner даже если у таблицы не задан свой runCode (см. сид flows.ts).
-		if (table.type === 'flow' && !table.config?.runCode?.trim()) {
+		if (isFlow && !table.config?.runCode?.trim()) {
 			const value = await flowHelper(record.id, params);
-			return { ok: true, value, steps: extractSteps(value) };
+			return { ok: true, value, steps: extractSteps(value), isFlow };
 		}
 
 		const code = table.config?.runCode;
@@ -180,9 +187,9 @@ export async function runRecordAction(
 			run: runAnotherTable,
 			flow: flowHelper
 		});
-		return { ok: true, value, steps: extractSteps(value) };
+		return { ok: true, value, steps: extractSteps(value), isFlow };
 	} catch (e: any) {
-		return { ok: false, error: e?.message ?? String(e), steps: (e as any)?.steps };
+		return { ok: false, error: e?.message ?? String(e), steps: (e as any)?.steps, isFlow };
 	}
 }
 

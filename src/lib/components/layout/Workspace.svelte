@@ -147,12 +147,13 @@
 					recordId={workspace.activeTab.recordId}
 					tabId={workspace.activeTab.id}
 					focusLineId={workspace.activeTab.focusLineId ?? ''}
+					initialParentId={workspace.activeTab.initialParentId ?? ''}
 				/>
 			{/if}
 		{:else}
 			<div class="empty-workspace-state">
-				<div class="hero-logo">📦 Low-Code ERP</div>
-				<p>Система готова к работе. Выберите справочник или документ на панели навигации.</p>
+				<div class="hero-logo">🛠️ Low-Code «Our life - our rules»</div>
+				<p>Система готова к работе. Настройте её правила под комфортный work-life balance.</p>
 			</div>
 		{/if}
 	</div>

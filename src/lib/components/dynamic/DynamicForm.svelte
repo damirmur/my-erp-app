@@ -1,12 +1,19 @@
 <script lang="ts">
-	import { db, type LocalColumn, type LocalTable, type LocalLine } from '$lib/db/indexeddb';
+	import {
+		db,
+		type LocalColumn,
+		type LocalTable,
+		type LocalLine,
+		type LocalRecord
+	} from '$lib/db/indexeddb';
 	import { workspace } from '$lib/state/workspace.svelte';
 	import { printerService } from '$lib/services/printer';
 	import { autoFillDocumentFields, todayIso } from '$lib/services/numbers';
 	import { physicalDeleteRecords } from '$lib/services/records';
 	import { runRecordAction } from '$lib/services/actionRunner';
-	import { isReadOnly, findParentColumn } from '$lib/table-types';
+	import { isReadOnly, getEffectiveConfig } from '$lib/table-types';
 	import { fieldRegistry } from '$lib/fields';
+	import GroupField from '$lib/fields/GroupField.svelte';
 	import { isValidBirthLocal, defaultBirth } from '$lib/fields/birth';
 	import { selectOptionsFor } from '$lib/services/flowElements';
 	import { buildExecuteUrl, buildRecordUrl, fullUrlFor } from '$lib/services/deeplink';
@@ -15,13 +22,18 @@
 	import PeriodsTable from './PeriodsTable.svelte';
 	import FlowRefsPanel from './FlowRefsPanel.svelte';
 
-	let { tableId, recordId, tabId = '', focusLineId = '' } = $props();
+	let { tableId, recordId, tabId = '', focusLineId = '', initialParentId = '' } = $props();
 
 	let columns = $state<LocalColumn[]>([]);
 	let recordData = $state<Record<string, any>>({});
 	let recordStatus = $state<'draft' | 'posted' | 'marked_for_deletion'>('draft');
 	let tableTitle = $state('Документ');
 	let tableMeta = $state<LocalTable | null>(null);
+
+	// Иерархия: родительская группа (top-level parent_id) и её исключения при выборе
+	let parentId = $state<string>('');
+	let tableRecords = $state<LocalRecord[]>([]);
+	let forbiddenGroupIds = $state<Set<string>>(new Set());
 
 	let objectSubTables = $state<LocalTable[]>([]);
 	let activeSubTabIndex = $state<number>(0);
@@ -32,7 +44,12 @@
 
 	let tableType = $derived(tableMeta?.type ?? 'document');
 	let tableConfig = $derived(tableMeta?.config ?? {});
-	let readOnly = $derived(isReadOnly(tableType, recordStatus, tableConfig));
+	// Иерархия (группы/папки): фича типа/таблицы — показываем поле «Группа» в шапке
+	let isHierarchical = $derived(getEffectiveConfig(tableMeta).features.hierarchy);
+	// Системные таблицы (например, «История») открываются только для просмотра
+	let readOnly = $derived(
+		tableType === 'system' || isReadOnly(tableType, recordStatus, tableConfig)
+	);
 	let isConstant = $derived(tableType === 'constant');
 	let isPeriodic = $derived(tableConfig.periodic === true && isConstant);
 	// Поле значения константы: универсальное или классическое «value» (не первая
@@ -141,14 +158,21 @@
 		if (existRecord) {
 			recordData = { ...existRecord.data };
 			recordStatus = existRecord.status;
+			parentId = String(existRecord.parent_id ?? '');
 		} else if (isConstant) {
 			recordData = { value: '' };
 			recordStatus = 'draft';
+			parentId = initialParentId ?? '';
 		} else {
 			// Новая запись: дата = сегодня, номер — следующий в пределах года.
 			recordData = await autoFillDocumentFields(tableId, {});
 			recordStatus = 'draft';
+			parentId = initialParentId ?? '';
 		}
+
+		// Все записи таблицы — нужны для расчёта исключений групп (потомки).
+		const allTableRecords = await db.data_records.where('table_id').equals(tableId).toArray();
+		tableRecords = allTableRecords;
 
 		columns.forEach((col) => {
 			if (recordData[col.name] === undefined) {
@@ -183,6 +207,49 @@
 
 		loading = false;
 	}
+
+	// Множество id, недоступных как «Группа» для записи recordId:
+	//   — сама запись (parent_id не может быть равен самому себе);
+	//   — текущая группа записи (чтобы не выбирать группу, в которой уже лежим);
+	//   — все потомки (кто находится в поддереве записи) — защита от циклов.
+	// Потомки собираются по top-level parent_id записи (единственный источник иерархии).
+	function computeForbiddenGroups(
+		allRecords: LocalRecord[],
+		recordId: string,
+		currentParent: string
+	): Set<string> {
+		const forbidden = new Set<string>();
+		forbidden.add(recordId);
+		if (currentParent) forbidden.add(currentParent);
+
+		// Потомки recordId: BFS по parent_id, начиная с детей recordId.
+		const children = new Map<string, string[]>();
+		for (const r of allRecords) {
+			const pid = String(r.parent_id ?? '');
+			if (!pid) continue;
+			if (!children.has(pid)) children.set(pid, []);
+			children.get(pid)!.push(r.id);
+		}
+		const queue = [recordId];
+		while (queue.length > 0) {
+			const id = queue.shift()!;
+			for (const child of children.get(id) ?? []) {
+				if (forbidden.has(child)) continue;
+				forbidden.add(child);
+				queue.push(child);
+			}
+		}
+		return forbidden;
+	}
+
+	// Запрещённые для выбора группы пересчитываются при смене «Группы»: включают
+	// саму запись, текущую группу и всех потомков записи (защита от циклов).
+	$effect(() => {
+		parentId;
+		tableRecords;
+		if (!tableMeta) return;
+		forbiddenGroupIds = computeForbiddenGroups(tableRecords, recordId, parentId);
+	});
 
 	// Значение последнего периода (актуальное)
 	function latestPeriodValue(): any {
@@ -301,18 +368,15 @@
 		recordData = { ...recordData, ...autoData };
 
 		try {
-			// Родитель в форме задаётся колонкой-ссылкой на саму таблицу («Родитель»);
-			// синхронизируем его в отдельное поле parent_id, по которому строится иерархия.
-			const parentColumn = findParentColumn(columns, tableId);
-			const parentId = parentColumn ? cleanData[parentColumn.name] || null : null;
-
+			// Иерархия хранится в top-level parent_id записи (поле «Группа» в шапке
+			// формы). В data.parent_id НЕ пишем — колонка-ссылка больше не используется.
 			await db.transaction('rw', [db.data_records, db.data_lines], async () => {
 				await db.data_records.put({
 					id: recordId,
 					table_id: tableId,
 					status: targetStatus as any,
 					is_folder: false,
-					parent_id: parentId,
+					parent_id: parentId || null,
 					data: { ...autoData, total_amount: totalAmount },
 					is_dirty: 1,
 					updated_at: new Date().toISOString()
@@ -414,19 +478,15 @@
 			recordData = { ...(updated.data ?? {}) };
 		}
 		workspace.setDirty(tabId, false);
-		// Панель «API» открываем только при ошибке или реальном возвращаемом
-		// значении — код, который ничего не вернул, не должен выскакивать пустым.
-		if (!result.ok || result.value !== undefined) {
-			workspace.showApiResult({
-				href: buildExecuteUrl(recordId),
-				label: `${tableTitle} №${recordData.number || recordData.name || '…'} · Выполнить`,
-				ok: result.ok,
-				value: result.ok ? result.value : undefined,
-				error: result.error,
-				steps: result.steps,
-				executedAt: new Date().toISOString()
-			});
-		}
+		// Сценарий (flow): прогон пишется в историю, панель «API» — только при
+		// ошибке. Для остальных кодов: при ошибке или реальном возвращаемом значении.
+		const objectTitle = `${tableTitle} №${recordData.number || recordData.name || '…'}`;
+		workspace.showRunResult(result, {
+			recordId,
+			href: buildExecuteUrl(recordId),
+			label: `${objectTitle} · Выполнить`,
+			title: objectTitle
+		});
 	}
 
 	async function handleDelete() {
@@ -520,6 +580,18 @@
 	{:else}
 		<div class="form-body">
 			<div class="form-grid">
+				{#if isHierarchical}
+					<div class="form-field">
+						<label for="parent_id">Группа</label>
+						<GroupField
+							bind:value={parentId}
+							disabled={readOnly}
+							{tableId}
+							forbidden={forbiddenGroupIds}
+							onChange={markAsDirty}
+						/>
+					</div>
+				{/if}
 				{#each columns as col}
 					{@const FC = fieldRegistry[col.type]?.FormField}
 					<div class="form-field" class:wide={wideFieldTypes.includes(col.type)}>

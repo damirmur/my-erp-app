@@ -205,9 +205,9 @@ Only **saves and deletes** are recorded — openings are deliberately not logged
 - `saveRecordWithLines` (runCode `save()`, `src/lib/services/actionRunner.ts`) → `'save'`
 - `physicalDeleteRecords` (`src/lib/services/records.ts`) captures titles from the local cache **before** deletion, then writes `'delete'`
 
-Record shape: `data = { object_title, link, opened_at, event, event_type }` (`event` = «сохранение (статус)» / «удаление»; `event_type` = `save`/`delete`). Each operation is its own row (no dedup); system tables themselves are skipped. Capped at 50 rows (`HISTORY_LIMIT`). Rows are ordinary records, so they sync to Supabase like any other data. `workspace.clearHistory()` removes them locally and on the server.
+Record shape: `data = { object_title, link, opened_at, event, event_type }` (`event` = «сохранение (статус)» / «удаление» / «выполнение сценария…»; `event_type` = `save`/`delete`/`run`). Flow runs add `data.description` (readable per-step resume), `steps`, `error` and `result`. Each operation is its own row (no dedup); system tables themselves are skipped. Capped at 50 rows (`HISTORY_LIMIT`). Rows are ordinary records, so they sync to Supabase like any other data. `workspace.clearHistory()` removes them locally and on the server.
 
-The Sidebar «🕘 История» button (main mode) opens the table as a `DynamicList`. Rows don't open a form: `DynamicList.openRecord` special-cases `type === 'system'` and reopens the linked object via `record.data.link` → `workspace.openFromLink()` (save rows reopen the object; delete rows point to a deleted object). The list sorts by `opened_at` descending by default.
+The Sidebar «🕘 История» button (main mode) opens the table as a `DynamicList`. A row click opens the history record itself as a form (`DynamicList.openRecord` treats system tables like any other table; `DynamicForm` forces `readOnly` for `type === 'system'`). The list sorts by `opened_at` descending by default.
 
 ---
 

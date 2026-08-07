@@ -3,7 +3,7 @@
 	import { workspace } from '$lib/state/workspace.svelte';
 	import { autoFillDocumentFields, todayIso } from '$lib/services/numbers';
 	import { printerService } from '$lib/services/printer';
-	import { getTableType, getEffectiveConfig, findParentColumn } from '$lib/table-types';
+	import { getTableType, getEffectiveConfig } from '$lib/table-types';
 	import { formatFieldValue } from '$lib/fields';
 	import { physicalDeleteRecords } from '$lib/services/records';
 	import { runRecordAction, mergeParams } from '$lib/services/actionRunner';
@@ -37,9 +37,6 @@
 	let tableType = $derived(tableMeta?.type ?? 'document');
 	let tableTypeDef = $derived(getTableType(tableType));
 	let isHierarchical = $derived(getEffectiveConfig(tableMeta).features.hierarchy);
-
-	// Колонка «Родитель» (ссылка на саму таблицу): задаёт группу в форме иерархического справочника
-	let parentColumnName = $derived(findParentColumn(allColumns, tableId)?.name ?? null);
 
 	// Системные таблицы (например, история действий) по умолчанию сортируем
 	// по дате открытия от новых к старым, а не по колонке "number".
@@ -122,13 +119,11 @@
 	let filteredAndSortedRecords = $derived.by(() => {
 		const currentLevelRecords = records.filter((r) => {
 			if (!isHierarchical || viewMode === 'all') return true;
-			// Родитель хранится в parent_id (папки) и/или в колонке-ссылке «Родитель» (форма).
-			const parentValue = parentColumnName ? r.data?.[parentColumnName] || null : null;
-			const parentId = r.parent_id ?? parentValue;
+			// Иерархия хранится в top-level parent_id записи (единственный источник).
 			if (currentFolderId === null) {
-				return parentId == null || !folderIds.has(parentId);
+				return r.parent_id == null || !folderIds.has(String(r.parent_id));
 			}
-			return parentId === currentFolderId;
+			return String(r.parent_id) === currentFolderId;
 		});
 
 		return currentLevelRecords.sort((a, b) => {
@@ -238,7 +233,13 @@
 	async function handleAction(actionId: string) {
 		switch (actionId) {
 			case 'create':
-				workspace.openForm(tableId, 'new', tableMeta?.title ?? '');
+				workspace.openForm(
+					tableId,
+					'new',
+					tableMeta?.title ?? '',
+					undefined,
+					currentFolderId ?? ''
+				);
 				break;
 			case 'createFolder':
 				await handleCreateFolder();
@@ -278,7 +279,6 @@
 		if (!folderName) return;
 
 		const folderData: Record<string, any> = { name: folderName, number: 'ПАПКА' };
-		if (parentColumnName && currentFolderId) folderData[parentColumnName] = currentFolderId;
 
 		await db.data_records.put({
 			id: crypto.randomUUID(),
@@ -327,7 +327,6 @@
 			date: todayIso()
 		});
 		const nextFreeNumber = newRecordData.number ?? '';
-		if (parentColumnName) newRecordData[parentColumnName] = currentFolderId ?? '';
 
 		await db.transaction('rw', [db.data_records, db.data_lines], async () => {
 			await db.data_records.put({
@@ -439,19 +438,16 @@
 		const selected = records.filter((r) => selectedIds.includes(r.id));
 		const result = await runRecordAction(selected[0]?.id ?? '', mergeParams(selected[0] ?? null));
 		if (selected.length === 1 && selected[0]) {
-			// Панель «API» — только при ошибке или реальном результате
-			if (!result.ok || result.value !== undefined) {
-				const num = selected[0].data?.number || selected[0].data?.name;
-				workspace.showApiResult({
-					href: buildExecuteUrl(selected[0].id),
-					label: `${tableMeta?.title ?? ''} №${num || '…'} · Выполнить`,
-					ok: result.ok,
-					value: result.ok ? result.value : undefined,
-					error: result.error,
-					steps: result.steps,
-					executedAt: new Date().toISOString()
-				});
-			}
+			// Сценарий (flow): прогон пишется в историю, панель «API» — только при
+			// ошибке. Для остальных кодов: при ошибке или реальном результате.
+			const num = selected[0].data?.number || selected[0].data?.name;
+			const objectTitle = `${tableMeta?.title ?? ''} №${num || '…'}`;
+			workspace.showRunResult(result, {
+				recordId: selected[0].id,
+				href: buildExecuteUrl(selected[0].id),
+				label: `${objectTitle} · Выполнить`,
+				title: objectTitle
+			});
 		}
 	}
 
@@ -512,14 +508,6 @@
 	}
 
 	function openRecord(record: LocalRecord) {
-		// Системные таблицы (например, история): запись ведёт на исходный объект
-		// через сохранённую ссылку, а не открывается как обычная форма.
-		if (tableMeta?.type === 'system') {
-			const link = record.data?.link;
-			if (typeof link === 'string' && link) workspace.openFromLink(link);
-			return;
-		}
-
 		if (record.is_folder && isHierarchical) {
 			// В развёрнутом списке клик по папке переключает в режим «По группам» и открывает её
 			if (viewMode === 'all') viewMode = 'groups';
@@ -691,6 +679,8 @@
 											if (!isCoarse) toggleSelect(record.id);
 										}}
 										class:bold-text={record.is_folder}
+										class:cell-multiline={typeof record.data[col.name] === 'string' &&
+											(record.data[col.name] as string).includes('\n')}
 									>
 										{#if isHttpUrl(record.data[col.name])}
 											<a
@@ -938,6 +928,9 @@
 	.cell-link {
 		color: #2563eb;
 		text-decoration: underline;
+	}
+	.cell-multiline {
+		white-space: pre-wrap;
 	}
 	.cell-link:hover {
 		color: #1d4ed8;

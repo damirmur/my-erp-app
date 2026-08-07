@@ -8,7 +8,7 @@ const template: TableTypeModule = {
 	statuses: [
 		{
 			value: 'draft',
-			label: 'Черновик',
+			label: 'Записан',
 			icon: '⚪',
 			badgeClass: 'status-draft',
 			isReadOnly: false

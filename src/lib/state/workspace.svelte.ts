@@ -1,5 +1,6 @@
-import { parseHash, resolveLink } from '$lib/services/deeplink';
+import { parseHash, resolveLink, buildRecordUrl } from '$lib/services/deeplink';
 import { runApiCommand, type ApiCommandResult } from '$lib/services/apiCommand';
+import type { RunRecordResult } from '$lib/services/actionRunner';
 import { db } from '$lib/db/indexeddb';
 import { supabase } from '$lib/db/supabase';
 import { HISTORY_TABLE_NAME } from '$lib/state/metadata';
@@ -9,10 +10,28 @@ const HISTORY_LIMIT = 50;
 
 // Человекочитаемые подписи статусов записи для события «сохранение»
 const STATUS_LABELS: Record<string, string> = {
-	draft: 'черновик',
+	draft: 'записан',
 	posted: 'проведён',
 	marked_for_deletion: 'помечен на удаление'
 };
+
+// Резюме прогона сценария для колонки «Описание» истории: результат, пошаговые
+// статусы узлов с длительностью/ошибками и итоговое значение (если есть).
+function describeFlowRun(result: ApiCommandResult): string {
+	const lines: string[] = [];
+	if (!result.ok) {
+		lines.push(`Ошибка: ${result.error ?? 'неизвестна'}`);
+	}
+	for (const step of result.steps ?? []) {
+		const icon = step.status === 'ok' ? '✓' : step.status === 'error' ? '✗' : '⋯';
+		const dur = step.durationMs != null ? ` (${step.durationMs} мс)` : '';
+		lines.push(`${icon} ${step.name}${dur}${step.error ? `: ${step.error}` : ''}`);
+	}
+	if (result.ok && result.value !== undefined) {
+		lines.push('Результат: ' + JSON.stringify(result.value, null, 2));
+	}
+	return lines.join('\n');
+}
 
 // Описываем интерфейс вкладки нашей ERP-системы
 export interface WorkspaceTab {
@@ -21,6 +40,7 @@ export interface WorkspaceTab {
 	tableId: string; // ID таблицы метаданных (ссылка на meta_tables.id)
 	recordId?: string; // ID конкретной записи (только для форм)
 	focusLineId?: string; // ID строки табличной части, которую нужно выделить при открытии формы
+	initialParentId?: string; // Стартовая «Группа» для новой записи (иерархия)
 	title: string; // Заголовок вкладки (например, "Товары (список)" или "Накладная №5")
 	isDirty: boolean; // Флаг измененности (есть ли несохраненные данные, аналог "*" в 1С)
 }
@@ -47,14 +67,16 @@ class WorkspaceManager {
 	// (meta_tables.name = 'history') как обычные записи data_records:
 	// data = { object_title, link, opened_at, event, event_type }. Сам изменяемый
 	// объект не должен быть системной таблицей, иначе запись зациклится.
-	// Журнал изменений: 'save'/'delete' — каждая операция пишется отдельной записью.
+	// Журнал изменений: 'save'/'delete' — каждая операция пишется отдельной записью,
+	// 'run' — выполнение сценария (extra содержит шаги узлов, ошибку и результат).
 	// Открытия в историю не фиксируются.
 	async recordHistory(
 		tableId: string,
 		title: string,
 		link: string,
-		event: 'save' | 'delete',
-		status?: string
+		event: 'save' | 'delete' | 'run',
+		status?: string,
+		extra?: Record<string, any>
 	) {
 		try {
 			const meta = await db.meta_tables.get(tableId);
@@ -67,6 +89,8 @@ class WorkspaceManager {
 			let eventLabel = 'удаление';
 			if (event === 'save') {
 				eventLabel = status ? `сохранение (${STATUS_LABELS[status] ?? status})` : 'сохранение';
+			} else if (event === 'run') {
+				eventLabel = extra?.failed ? 'выполнение сценария (ошибка)' : 'выполнение сценария';
 			}
 
 			await db.transaction('rw', [db.data_records], async () => {
@@ -76,7 +100,14 @@ class WorkspaceManager {
 					status: 'draft',
 					is_folder: false,
 					parent_id: null,
-					data: { object_title: title, link, opened_at: now, event: eventLabel, event_type: event },
+					data: {
+						object_title: title,
+						link,
+						opened_at: now,
+						event: eventLabel,
+						event_type: event,
+						...extra
+					},
 					is_dirty: 1,
 					updated_at: now
 				});
@@ -89,6 +120,35 @@ class WorkspaceManager {
 			});
 		} catch (e) {
 			console.warn('Не удалось записать действие в историю:', e);
+		}
+	}
+
+	// Записать прогон сценария (flow) в историю: успешный и упавший одинаково.
+	// В data.description — читаемое резюме прогона (статусы шагов, ошибки,
+	// результат) для колонки «Описание»; в steps/error/result — структура для
+	// детального разбора.
+	async recordFlowRun(result: ApiCommandResult) {
+		if (!result.flow?.recordId) return;
+		try {
+			const record = await db.data_records.get(result.flow.recordId);
+			if (!record) return;
+			const failed = !result.ok || (result.steps ?? []).some((s) => s.status === 'error');
+			await this.recordHistory(
+				record.table_id,
+				result.flow.title,
+				buildRecordUrl(result.flow.recordId),
+				'run',
+				undefined,
+				{
+					failed,
+					description: describeFlowRun(result),
+					steps: result.steps,
+					error: result.error,
+					result: result.ok ? result.value : null
+				}
+			);
+		} catch (e) {
+			console.warn('Не удалось записать выполнение сценария в историю:', e);
 		}
 	}
 
@@ -129,7 +189,13 @@ class WorkspaceManager {
 	}
 
 	// 2. Открыть форму элемента/документа (аналог ФормыЭлемента/ФормыДокумента в 1С)
-	openForm(tableId: string, recordId: string | 'new', tableTitle: string, recordNumber?: string) {
+	openForm(
+		tableId: string,
+		recordId: string | 'new',
+		tableTitle: string,
+		recordNumber?: string,
+		initialParentId?: string
+	) {
 		// Если это новый элемент, генерируем временный ID для вкладки
 		const actualRecordId = recordId === 'new' ? crypto.randomUUID() : recordId;
 		const tabId = `form_${tableId}_${actualRecordId}`;
@@ -149,7 +215,8 @@ class WorkspaceManager {
 			tableId,
 			recordId: actualRecordId,
 			title,
-			isDirty: recordId === 'new' // Новая запись сразу считается измененной
+			isDirty: recordId === 'new', // Новая запись сразу считается измененной
+			initialParentId
 		});
 		this.activeTabId = tabId;
 	}
@@ -198,7 +265,7 @@ class WorkspaceManager {
 			const result = await runApiCommand(link);
 			if (!result) return false;
 			if (!result.ok || result.value !== undefined) {
-				this.apiResult = result;
+				this.showApiResult(result);
 			}
 			return true;
 		}
@@ -364,9 +431,41 @@ class WorkspaceManager {
 		return this.constantFormOpened.has(tableId);
 	}
 
-	// 13. Показать результат в панели «API» (из «▶️ Выполнить» или API-ссылки)
+	// 13. Показать результат в панели «API» (из «▶️ Выполнить» или API-ссылки).
+	// Для сценариев (flow) прогон всегда пишется в историю, а панель открывается
+	// только при ошибке — успешное выполнение не перекрывает экран. Для остальных
+	// результатов панель открывается как раньше (вызывающая сторона решает, когда).
 	showApiResult(result: ApiCommandResult) {
+		if (result.flow?.recordId) {
+			void this.recordFlowRun(result);
+			if (result.ok) return;
+		}
 		this.apiResult = result;
+	}
+
+	// 13a. Показать результат «▶️ Выполнить» (кнопка на форме/в списке). Сценарии
+	// (flow) — см. showApiResult; обычные коды действий — панель при ошибке или
+	// реальном возвращаемом значении (код без return не выскакивает пустым).
+	showRunResult(
+		result: RunRecordResult,
+		opts: { recordId: string; href: string; label: string; title?: string }
+	) {
+		const flow = result.isFlow
+			? { recordId: opts.recordId, title: opts.title ?? opts.label }
+			: undefined;
+		const apiResult: ApiCommandResult = {
+			href: opts.href,
+			label: opts.label,
+			ok: result.ok,
+			value: result.ok ? result.value : undefined,
+			error: result.error,
+			steps: result.steps,
+			executedAt: new Date().toISOString(),
+			flow
+		};
+		if (result.isFlow || !result.ok || result.value !== undefined) {
+			this.showApiResult(apiResult);
+		}
 	}
 
 	// 14. Закрыть панель «API»

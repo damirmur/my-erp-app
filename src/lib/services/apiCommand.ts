@@ -20,6 +20,9 @@ export interface ApiCommandResult {
 	error?: string;
 	steps?: FlowStep[];
 	executedAt: string;
+	// Признак прогона сценария (тип таблицы 'flow'): результат записывается
+	// в историю всегда, а панель «API» открывается только при ошибке.
+	flow?: { recordId: string; title: string };
 }
 
 // Выполнить API-команду по deep-link вида #/t/{id}.json, #/r/{id}.json,
@@ -37,7 +40,10 @@ export async function runApiCommand(link: DeepLink): Promise<ApiCommandResult | 
 				value: result.value,
 				error: result.error,
 				steps: result.steps,
-				executedAt
+				executedAt,
+				flow: result.isFlow
+					? { recordId: link.recordId, title: tableTitle ?? 'Сценарий' }
+					: undefined
 			};
 		}
 

@@ -9,7 +9,7 @@ const flow: TableTypeModule = {
 	statuses: [
 		{
 			value: 'draft',
-			label: 'Черновик',
+			label: 'Записан',
 			icon: '⚪',
 			badgeClass: 'status-draft',
 			isReadOnly: false

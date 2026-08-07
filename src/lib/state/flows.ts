@@ -280,6 +280,32 @@ async function upgradeScenarioParamsColumn(scenarioId: string, online: boolean):
 	await db.meta_columns.put({ ...col, type: 'paramslist' });
 }
 
+// Поле «Элемент» узла ссылается на каталог «Элементы сценария» (flow_elements).
+// У старых установок related_table_id не был заполнен (универсальный поиск),
+// из-за чего в выпадающем списке показывались ВСЕ записи системы. Идемпотентно
+// проставляем ссылку на каталог — серверу и локально.
+async function upgradeNodeElementColumn(
+	nodesId: string,
+	elementsId: string,
+	online: boolean
+): Promise<void> {
+	const col = await db.meta_columns
+		.where('table_id')
+		.equals(nodesId)
+		.filter((c) => c.name === 'element')
+		.first();
+	if (!col || col.related_table_id === elementsId) return;
+
+	if (online) {
+		try {
+			await supabase.from('meta_columns').update({ related_table_id: elementsId }).eq('id', col.id);
+		} catch {
+			// сервер недоступен — достаточно локального обновления
+		}
+	}
+	await db.meta_columns.put({ ...col, related_table_id: elementsId });
+}
+
 // Идемпотентное создание таблиц модуля «Сценарии». Вызывается из
 // metadata.ensureSystemTables() — после ensureApiQueryTables (для ссылки на
 // каталог «Сервисы API»).
@@ -312,6 +338,9 @@ export async function ensureFlowTables(): Promise<void> {
 		await ensureColumns(nodesId, nodeColumns(servicesId ?? '', elementsId ?? ''), online);
 		// Старые установки: колонка node_type была строкой — переводим в «Выбор из списка»
 		await upgradeNodeTypeColumn(nodesId, online);
+		// Старые установки: поле «Элемент» без связанной таблицы показывало ВСЕ
+		// записи — проставляем ссылку на каталог «Элементы сценария».
+		if (elementsId) await upgradeNodeElementColumn(nodesId, elementsId, online);
 	}
 
 	// ТЧ «Связи»: строки = рёбра графа; from_node/to_node ссылаются на строки «Узлы».

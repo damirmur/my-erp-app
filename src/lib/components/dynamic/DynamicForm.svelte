@@ -21,6 +21,7 @@
 	import TabularSection from './TabularSection.svelte';
 	import PeriodsTable from './PeriodsTable.svelte';
 	import FlowRefsPanel from './FlowRefsPanel.svelte';
+	import FlowDiagram from './FlowDiagram.svelte';
 
 	let { tableId, recordId, tabId = '', focusLineId = '', initialParentId = '' } = $props();
 
@@ -150,7 +151,9 @@
 		const allLineRows = await db.data_lines.where('record_id').equals(recordId).toArray();
 		const newBackup: Record<string, LocalLine[]> = {};
 		for (const sub of objectSubTables) {
-			newBackup[sub.id] = allLineRows.filter((l) => l.table_id === sub.id);
+			newBackup[sub.id] = allLineRows
+				.filter((l) => l.table_id === sub.id)
+				.sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
 		}
 		subTableBackup = newBackup;
 
@@ -195,7 +198,7 @@
 			const focusLine = allLineRows.find((l) => l.id === focusLineId);
 			if (focusLine) {
 				const subIndex = objectSubTables.findIndex((t) => t.id === focusLine.table_id);
-				if (subIndex !== -1) activeSubTabIndex = subIndex;
+				if (subIndex !== -1) switchSubTab(subIndex);
 			}
 		}
 
@@ -279,7 +282,7 @@
 			.then((line) => {
 				if (cancelled || !line) return;
 				const subIndex = objectSubTables.findIndex((t) => t.id === line.table_id);
-				if (subIndex !== -1) activeSubTabIndex = subIndex;
+				if (subIndex !== -1) switchSubTab(subIndex);
 			})
 			.catch(() => {});
 		return () => {
@@ -624,6 +627,7 @@
 			</div>
 
 			{#if tableType === 'flow'}
+				<FlowDiagram data={recordData} lines={allLines} />
 				<FlowRefsPanel data={recordData} lines={allLines} />
 			{/if}
 

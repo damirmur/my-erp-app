@@ -14,23 +14,43 @@ import type { ApiCallResult } from '$lib/services/actionRunner';
 export interface FlowElementDef {
 	type: string;
 	label: string;
+	icon: string;
 	hint: string;
 }
 
 export const FLOW_ELEMENTS: FlowElementDef[] = [
-	{ type: 'start', label: 'Старт', hint: 'Входные параметры сценария' },
-	{ type: 'constant', label: 'Константа', hint: '{ "name": "city" }' },
-	{ type: 'get', label: 'Извлечь из JSON', hint: '{ "path": "city" }' },
-	{ type: 'api', label: 'Запрос API', hint: 'Сервис (ссылка) + параметры' },
-	{ type: 'template', label: 'Шаблон текста', hint: '{ "template": "… ${current.temp_c}" }' },
-	{ type: 'find', label: 'Найти запись', hint: '{ "table": "…", "where": {…} }' },
-	{ type: 'create', label: 'Создать запись', hint: '{ "table": "…", "data": {…}, "lines": {…} }' },
-	{ type: 'run', label: 'Выполнить действие', hint: '{ "table": "…", "record": "${id}" }' },
-	{ type: 'code', label: 'Код', hint: 'Произвольный JS (колонка «Код узла»)' }
+	{ type: 'start', label: 'Старт', icon: '▶', hint: 'Входные параметры сценария' },
+	{ type: 'constant', label: 'Константа', icon: '📌', hint: '{ "name": "city" }' },
+	{ type: 'get', label: 'Извлечь из JSON', icon: '🪝', hint: '{ "path": "city" }' },
+	{ type: 'api', label: 'Запрос API', icon: '🌐', hint: 'Сервис (ссылка) + параметры' },
+	{
+		type: 'template',
+		label: 'Шаблон текста',
+		icon: '🖼',
+		hint: '{ "template": "… ${current.temp_c}" }'
+	},
+	{ type: 'find', label: 'Найти запись', icon: '🔍', hint: '{ "table": "…", "where": {…} }' },
+	{
+		type: 'create',
+		label: 'Создать запись',
+		icon: '➕',
+		hint: '{ "table": "…", "data": {…}, "lines": {…} }'
+	},
+	{
+		type: 'run',
+		label: 'Выполнить действие',
+		icon: '🏃',
+		hint: '{ "table": "…", "record": "${id}" }'
+	},
+	{ type: 'code', label: 'Код', icon: '🧩', hint: 'Произвольный JS (колонка «Код узла»)' }
 ];
 
 export function flowElementLabel(type: string): string {
 	return FLOW_ELEMENTS.find((e) => e.type === type)?.label ?? type;
+}
+
+export function flowElementIcon(type: string): string {
+	return FLOW_ELEMENTS.find((e) => e.type === type)?.icon ?? '';
 }
 
 // Варианты выбора для колонок «Тип»: в ТЧ «Узлы» — колонка node_type,
@@ -46,6 +66,21 @@ export function selectOptionsFor(
 		return FLOW_ELEMENTS.map((e) => ({ value: e.type, label: e.label }));
 	}
 	return [];
+}
+
+// Асинхронная версия выбора для колонок, чей список зависит от данных
+// (например, target_table у печатных форм — все таблицы верхнего уровня).
+export async function loadSelectOptions(
+	tableName: string,
+	columnName: string
+): Promise<{ value: string; label: string }[]> {
+	if (tableName === 'print_forms' && columnName === 'target_table') {
+		const tables = await db.meta_tables.filter((t) => !t.parent_table_id).toArray();
+		return tables
+			.sort((a, b) => a.title.localeCompare(b.title))
+			.map((t) => ({ value: t.id, label: t.title }));
+	}
+	return selectOptionsFor(tableName, columnName);
 }
 
 // Доступ к значению по точечному пути (current.temp_c)

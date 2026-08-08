@@ -1,6 +1,7 @@
 import { db, type LocalColumn, type LocalLine, type LocalRecord } from '$lib/db/indexeddb';
 import { supabase } from '$lib/db/supabase';
 import { API_SERVICES_TABLE, ensureColumns, ensureTable } from '$lib/state/notifications';
+import { flowElementIcon } from '$lib/services/flowElements';
 
 // Модуль «Сценарии»: таблица (тип 'flow') с графом как в n8n. Одна запись =
 // одна схема; узлы и связи — табличные части этой записи, поэтому сценарий
@@ -189,6 +190,13 @@ function nodeColumns(
 function elementColumns(servicesId: string): Omit<LocalColumn, 'id' | 'table_id'>[] {
 	return [
 		{ name: 'name', title: 'Наименование', type: 'string', sort_order: 10, is_visible: true },
+		{
+			name: 'icon',
+			title: 'Значок',
+			type: 'string',
+			sort_order: 12,
+			is_visible: true
+		},
 		{
 			name: 'element_type',
 			title: 'Тип',
@@ -661,7 +669,35 @@ async function seedFlowElements(online: boolean, wttrId: string): Promise<Map<st
 			.equals(table.id)
 			.filter((r) => r.data?.name === def.name)
 			.first();
+		// Значок узла по типу (идемпотентно: заполняем, только если ещё пусто)
+		const icon = flowElementIcon(def.element_type);
 		if (existing) {
+			// Значок не был заполнен (до введения колонки) — дорисовываем
+			if (!existing.data?.icon && icon) {
+				const data = { ...existing.data, icon };
+				await db.data_records.put({
+					...existing,
+					data,
+					is_dirty: 1,
+					updated_at: new Date().toISOString()
+				});
+				if (online) {
+					try {
+						await supabase.from('data_records').upsert({
+							id: existing.id,
+							table_id: table.id,
+							status: existing.status,
+							data,
+							is_dirty: 1,
+							updated_at: new Date().toISOString(),
+							is_folder: existing.is_folder ?? false,
+							parent_id: existing.parent_id ?? null
+						});
+					} catch {
+						// уедет при ближайшем синке
+					}
+				}
+			}
 			const target = {
 				element_type: def.element_type,
 				params: def.params ?? {},
@@ -705,6 +741,7 @@ async function seedFlowElements(online: boolean, wttrId: string): Promise<Map<st
 			parent_id: null,
 			data: {
 				name: def.name,
+				icon,
 				element_type: def.element_type,
 				service: def.service ?? '',
 				params: def.params ?? {},

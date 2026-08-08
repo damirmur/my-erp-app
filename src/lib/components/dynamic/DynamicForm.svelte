@@ -15,13 +15,11 @@
 	import { fieldRegistry } from '$lib/fields';
 	import GroupField from '$lib/fields/GroupField.svelte';
 	import { isValidBirthLocal, defaultBirth } from '$lib/fields/birth';
-	import { selectOptionsFor } from '$lib/services/flowElements';
+	import { selectOptionsFor, loadSelectOptions } from '$lib/services/flowElements';
 	import { buildExecuteUrl, buildRecordUrl, fullUrlFor } from '$lib/services/deeplink';
 	import Toolbar from './Toolbar.svelte';
 	import TabularSection from './TabularSection.svelte';
 	import PeriodsTable from './PeriodsTable.svelte';
-	import FlowRefsPanel from './FlowRefsPanel.svelte';
-	import FlowDiagram from './FlowDiagram.svelte';
 
 	let { tableId, recordId, tabId = '', focusLineId = '', initialParentId = '' } = $props();
 
@@ -39,6 +37,30 @@
 	let objectSubTables = $state<LocalTable[]>([]);
 	let activeSubTabIndex = $state<number>(0);
 	let loading = $state(true);
+
+	// Варианты для полей «Выбор из списка»: статические (из selectOptionsFor) +
+	// асинхронные (например, target_table печатных форм — список таблиц).
+	let selectOptionsMap = $state<Record<string, { value: string; label: string }[]>>({});
+	$effect(() => {
+		const cols = columns.filter((c) => c.type === 'select');
+		if (cols.length === 0) return;
+		let cancelled = false;
+		(async () => {
+			const entries = await Promise.all(
+				cols.map(async (col) => {
+					const opts = await loadSelectOptions(tableMeta?.name ?? '', col.name);
+					return [col.id, opts] as const;
+				})
+			);
+			if (cancelled) return;
+			const map: Record<string, { value: string; label: string }[]> = {};
+			for (const [id, opts] of entries) map[id] = opts;
+			selectOptionsMap = map;
+		})();
+		return () => {
+			cancelled = true;
+		};
+	});
 
 	// Типы полей, у которых метка всегда над полем (не помещаются в одну строку)
 	const wideFieldTypes = ['textarea', 'jsonb', 'file', 'zip', 'universal', 'paramslist'];
@@ -425,7 +447,7 @@
 		);
 	}
 
-	async function handleAction(actionId: string) {
+	async function handleAction(actionId: string, printFormId = '') {
 		switch (actionId) {
 			case 'save':
 				await saveToDb('draft');
@@ -454,7 +476,7 @@
 				await handleCopy();
 				break;
 			case 'print':
-				printerService.printRecords(tableId, [recordId]);
+				printerService.printRecords(tableId, [recordId], printFormId);
 				break;
 			case 'run':
 				await handleRun();
@@ -629,18 +651,13 @@
 								{recordId}
 								candidates={col.type === 'linelink' ? nodeLineCandidates : undefined}
 								options={col.type === 'select'
-									? selectOptionsFor(tableMeta?.name ?? '', col.name)
+									? (selectOptionsMap[col.id] ?? selectOptionsFor(tableMeta?.name ?? '', col.name))
 									: undefined}
 							/>
 						{/if}
 					</div>
 				{/each}
 			</div>
-
-			{#if tableType === 'flow'}
-				<FlowDiagram data={recordData} lines={allLines} />
-				<FlowRefsPanel data={recordData} lines={allLines} />
-			{/if}
 
 			{#if objectSubTables.length > 0 && (!isConstant || isPeriodic)}
 				<div class="sub-tabs-wrapper">

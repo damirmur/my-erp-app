@@ -68,21 +68,12 @@ export interface LocalLine {
 	sort_order: number;
 }
 
-export interface PrintForm {
-	id: string;
-	table_id: string;
-	name: string;
-	template: string;
-	is_default: boolean;
-}
-
 // Инициализируем класс базы данных Dexie
 class ErpIndexedDB extends Dexie {
 	meta_tables!: Table<LocalTable, string>;
 	meta_columns!: Table<LocalColumn, string>;
 	data_records!: Table<LocalRecord, string>;
 	data_lines!: Table<LocalLine, string>;
-	print_forms!: Table<PrintForm, string>;
 
 	constructor() {
 		super('ErpOfflineCache');
@@ -91,8 +82,7 @@ class ErpIndexedDB extends Dexie {
 			meta_tables: 'id, &name, type',
 			meta_columns: 'id, table_id, name',
 			data_records: 'id, table_id, status, is_dirty, updated_at',
-			data_lines: 'id, record_id, table_id',
-			print_forms: 'id, table_id, is_default'
+			data_lines: 'id, record_id, table_id'
 		});
 	}
 }

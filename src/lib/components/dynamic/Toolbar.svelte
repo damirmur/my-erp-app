@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { db, type LocalColumn, type LocalTable } from '$lib/db/indexeddb';
 	import { getTableType, getActions, getStatusDef } from '$lib/table-types';
+	import { liveQuery } from 'dexie';
 
 	let {
 		mode = 'list',
@@ -18,22 +19,43 @@
 	let showColumnsMenu = $state(false);
 	let hasPrintForms = $derived(printForms.length > 0);
 
+	// Печатные формы таблицы: записи data_records системной таблицы print_forms,
+	// привязанные к текущей таблице колонкой target_table. Следим через liveQuery.
 	$effect(() => {
 		if (!tableId) return;
 		db.meta_tables.get(tableId).then((t) => (tableMeta = t ?? null));
-		if (mode === 'form') {
-			db.table('print_forms')
-				.where('table_id')
-				.equals(tableId)
-				.toArray()
-				.then((pf) => (printForms = pf));
-		}
+
+		const observable = liveQuery(async () => {
+			const pfTable = await db.meta_tables.where('name').equals('print_forms').first();
+			if (!pfTable) return [];
+			const rows = await db.data_records.where('table_id').equals(pfTable.id).toArray();
+			return rows
+				.filter((r) => r.data?.target_table === tableId && !r.is_folder)
+				.sort((a, b) => (a.data?.sort_order ?? 0) - (b.data?.sort_order ?? 0))
+				.map((r) => ({
+					id: r.id,
+					name: String(r.data?.name ?? ''),
+					is_default: r.data?.is_default === true || r.data?.is_default === 1
+				}));
+		});
+		const sub = observable.subscribe({
+			next: (pf) => (printForms = pf),
+			error: (err) => console.error('Ошибка чтения печатных форм:', err)
+		});
+		return () => sub.unsubscribe();
 	});
 
 	let tableTypeName = $derived(tableMeta?.type ?? '');
 	let tableConfig = $derived(tableMeta?.config ?? {});
 
-	let actions = $derived(getActions(tableTypeName, mode, tableConfig));
+	// Кнопка «Печать» показывается только если для таблицы есть хоть одна
+	// печатная форма: 1 форма → прямая печать, несколько → выпадающий список.
+	let printActionVisible = $derived(hasPrintForms);
+
+	// Остальные кнопки (кроме print) — из фич типа таблицы.
+	let actions = $derived(
+		getActions(tableTypeName, mode, tableConfig).filter((a) => a.id !== 'print')
+	);
 
 	let currentStatusDef = $derived(getStatusDef(tableTypeName, status));
 
@@ -50,21 +72,43 @@
 		document.addEventListener('click', close);
 		return () => document.removeEventListener('click', close);
 	});
+
+	function handlePrintClick(formId: string) {
+		showPrintMenu = false;
+		onAction?.('print', formId);
+	}
 </script>
 
 {#if tableMeta}
 	<div class="toolbar">
 		<div class="toolbar-actions">
 			{#each actions as act}
-				{#if act.id === 'print' && mode === 'form'}
+				<button
+					onclick={() => onAction?.(act.id)}
+					class="btn"
+					class:btn-primary={act.variant === 'primary'}
+					class:btn-success={act.variant === 'success'}
+					class:btn-danger={act.variant === 'danger'}
+					class:btn-warning={act.variant === 'warning'}
+					class:btn-text-danger={act.variant === 'text-danger'}
+					class:btn-text-success={act.variant === 'text-success'}
+					hidden={act.show && !act.show(status)}
+					disabled={act.disabled?.(status) ?? false}
+				>
+					{act.icon}
+					{act.label}
+				</button>
+			{/each}
+			{#if printActionVisible}
+				{#if printForms.length === 1}
+					<button class="btn" onclick={() => handlePrintClick(printForms[0].id)}>
+						🖨️ Печать
+					</button>
+				{:else}
 					<div class="print-dropdown-wrapper">
-						<button
-							onclick={() => (showPrintMenu = !showPrintMenu)}
-							class="btn"
-							disabled={!hasPrintForms}
-						>
-							{act.icon}
-							{act.label}
+						<button onclick={() => (showPrintMenu = !showPrintMenu)} class="btn">
+							🖨️ Печать
+							<span class="print-caret">▾</span>
 						</button>
 						{#if showPrintMenu && hasPrintForms}
 							<div class="print-menu">
@@ -72,10 +116,7 @@
 									<button
 										type="button"
 										class="print-menu-item"
-										onclick={() => {
-											showPrintMenu = false;
-											onAction?.('print', pf.id);
-										}}
+										onclick={() => handlePrintClick(pf.id)}
 									>
 										{pf.name}
 										{pf.is_default ? '✓' : ''}
@@ -84,24 +125,8 @@
 							</div>
 						{/if}
 					</div>
-				{:else}
-					<button
-						onclick={() => onAction?.(act.id)}
-						class="btn"
-						class:btn-primary={act.variant === 'primary'}
-						class:btn-success={act.variant === 'success'}
-						class:btn-danger={act.variant === 'danger'}
-						class:btn-warning={act.variant === 'warning'}
-						class:btn-text-danger={act.variant === 'text-danger'}
-						class:btn-text-success={act.variant === 'text-success'}
-						hidden={act.show && !act.show(status)}
-						disabled={act.disabled?.(status) ?? false}
-					>
-						{act.icon}
-						{act.label}
-					</button>
 				{/if}
-			{/each}
+			{/if}
 			{#if mode === 'list'}
 				<div class="toolbar-menu-wrap">
 					<button
@@ -272,6 +297,10 @@
 
 	.print-dropdown-wrapper {
 		position: relative;
+	}
+	.print-caret {
+		margin-left: 4px;
+		font-size: 0.7rem;
 	}
 	.print-menu {
 		position: absolute;

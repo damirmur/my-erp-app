@@ -5,6 +5,7 @@ import { seedNotificationDefaults } from '$lib/state/notifications';
 import { seedApiQueryDefaults } from '$lib/state/apiQueries';
 import { seedFlowExample } from '$lib/state/flows';
 import { seedBankStatementDefaults } from '$lib/state/bankStatements';
+import { seedPrintFormDefaults } from '$lib/state/printForms';
 
 // Ключ в localStorage: максимальная серверная updated_at из последнего pull.
 // Не зависит от локальных записей, поэтому сиды/история не могут сдвинуть
@@ -13,7 +14,6 @@ const SYNC_ANCHOR_KEY = 'erp_last_pull_anchor';
 
 export const syncService = {
 	// 1. Инициализация и скачивание метаданных (конфигурации системы)
-	// 1. Инициализация и скачивание метаданных (конфигурации системы и макетов печати)
 	async pullMetadata() {
 		try {
 			// Скачиваем структуру таблиц
@@ -39,27 +39,16 @@ export const syncService = {
 
 			if (cError) throw cError;
 
-			// Скачиваем HTML-макеты печатных форм
-			const { data: pForms, error: pfError } = await supabase.from('print_forms').select('*');
-
-			if (pfError) throw pfError;
-
 			// Очищаем локальный кэш конфигурации и записываем свежие данные одной транзакцией
-			await db.transaction(
-				'rw',
-				[db.meta_tables, db.meta_columns, db.table('print_forms')],
-				async () => {
-					await db.meta_tables.clear();
-					await db.meta_columns.clear();
-					await db.table('print_forms').clear(); // Очищаем старые макеты перед обновлением
+			await db.transaction('rw', [db.meta_tables, db.meta_columns], async () => {
+				await db.meta_tables.clear();
+				await db.meta_columns.clear();
 
-					if (uniqueTables) await db.meta_tables.bulkPut(uniqueTables);
-					if (columns) await db.meta_columns.bulkPut(columns);
-					if (pForms) await db.table('print_forms').bulkPut(pForms); // Сохраняем новые макеты в IndexedDB
-				}
-			);
+				if (uniqueTables) await db.meta_tables.bulkPut(uniqueTables);
+				if (columns) await db.meta_columns.bulkPut(columns);
+			});
 
-			console.log(' Метаданные (1С-конфигурация) и печатные формы успешно синхронизированы.');
+			console.log(' Метаданные (1С-конфигурация) успешно синхронизированы.');
 		} catch (err) {
 			console.error('Ошибка синхронизации метаданных:', err);
 		}
@@ -270,6 +259,7 @@ export const syncService = {
 			await seedApiQueryDefaults();
 			await seedFlowExample();
 			await seedBankStatementDefaults();
+			await seedPrintFormDefaults();
 			console.log('Синхронизация завершена.');
 		} finally {
 			running = false;

@@ -38,6 +38,27 @@
 	let tableTypeDef = $derived(getTableType(tableType));
 	let isHierarchical = $derived(getEffectiveConfig(tableMeta).features.hierarchy);
 
+	// Для печатных форм колонка target_table хранит id таблицы — показываем её
+	// заголовок (мапа id → title).
+	let tableTitleMap = $state<Record<string, string>>({});
+	$effect(() => {
+		if (tableMeta?.name !== 'print_forms') {
+			tableTitleMap = {};
+			return;
+		}
+		const observable = liveQuery(async () => {
+			const tables = await db.meta_tables.toArray();
+			const map: Record<string, string> = {};
+			for (const t of tables) map[t.id] = t.title;
+			return map;
+		});
+		const sub = observable.subscribe({
+			next: (map) => (tableTitleMap = map),
+			error: (err) => console.error('Ошибка чтения таблиц печатных форм:', err)
+		});
+		return () => sub.unsubscribe();
+	});
+
 	// Системные таблицы (например, история действий) по умолчанию сортируем
 	// по дате открытия от новых к старым, а не по колонке "number".
 	$effect(() => {
@@ -230,7 +251,7 @@
 		}
 	});
 
-	async function handleAction(actionId: string) {
+	async function handleAction(actionId: string, printFormId = '') {
 		switch (actionId) {
 			case 'create':
 				workspace.openForm(
@@ -266,7 +287,7 @@
 				await handleCopy();
 				break;
 			case 'print':
-				handleListPrint();
+				handleListPrint(printFormId);
 				break;
 			case 'run':
 				await handleRun();
@@ -423,12 +444,12 @@
 		selectedIds = [];
 	}
 
-	function handleListPrint() {
+	function handleListPrint(formId = '') {
 		const cleanIds = filteredAndSortedRecords
 			.filter((r) => selectedIds.includes(r.id) && !r.is_folder)
 			.map((r) => r.id);
 		if (cleanIds.length === 0) return alert('Выберите документы для печати (папки не печатаются)');
-		printerService.printRecords(tableId, cleanIds);
+		printerService.printRecords(tableId, cleanIds, formId);
 	}
 
 	// ▶️ Выполнить: код действия по выбранным записям (или декларативный вызов
@@ -480,6 +501,10 @@
 		// Универсальное поле: если в записи выбран тип «Ссылка» — то же поведение
 		if (col.type === 'universal' && raw?.t === 'link' && raw.v) {
 			return linkDisplay[`${col.id}:${raw.v}`] ?? String(raw.v);
+		}
+		// Печатные формы: target_table — id таблицы, показываем её заголовок
+		if (col.type === 'select' && col.name === 'target_table' && raw) {
+			return tableTitleMap[String(raw)] ?? String(raw);
 		}
 		return formatFieldValue(col.type, raw);
 	}

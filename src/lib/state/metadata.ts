@@ -8,6 +8,7 @@ import { ensureApiQueryTables } from '$lib/state/apiQueries';
 import { ensureConstantsTable } from '$lib/state/constants';
 import { ensureFlowTables } from '$lib/state/flows';
 import { ensureBankStatementTables } from '$lib/state/bankStatements';
+import { ensurePrintFormsTable } from '$lib/state/printForms';
 
 // Имя системной таблицы-истории действий. Уникально в meta_tables, используется
 // для поиска таблицы и в recordHistory/clearHistory/сайдбаре.
@@ -164,6 +165,10 @@ class MetadataManager {
 		// Модуль «Банковские выписки»: каталоги банков и счетов, документ
 		// «Выписки» с ТЧ «Операции» (импорт из PDF — кнопка «▶️ Выполнить»).
 		await ensureBankStatementTables();
+
+		// Таблица «Печатные формы»: реестр HTML-шаблонов для печати записей
+		// любых таблиц (справочников, документов, сценариев и т.д.).
+		await ensurePrintFormsTable();
 
 		// Таблица настроек приложения (порядок меню основного режима и т.п.).
 		await ensureSettingsTable();

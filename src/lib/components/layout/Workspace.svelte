@@ -51,13 +51,12 @@
 			// 2. Очищаем локальный кэш IndexedDB (свежие данные подтянутся при старте)
 			await db.transaction(
 				'rw',
-				[db.meta_tables, db.meta_columns, db.data_records, db.data_lines, db.table('print_forms')],
+				[db.meta_tables, db.meta_columns, db.data_records, db.data_lines],
 				async () => {
 					await db.meta_tables.clear();
 					await db.meta_columns.clear();
 					await db.data_records.clear();
 					await db.data_lines.clear();
-					await db.table('print_forms').clear();
 				}
 			);
 

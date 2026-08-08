@@ -4,6 +4,7 @@ import { buildRecordUrl, linkApi } from '$lib/services/deeplink';
 import { workspace } from '$lib/state/workspace.svelte';
 import { flowHelper, type FlowStep } from '$lib/services/flowRunner';
 import { importStatement } from '$lib/services/bankParser';
+import { flowLayout } from '$lib/services/flowLayout';
 import { autoFillDocumentFields } from '$lib/services/numbers';
 
 // Контекст, передаваемый в пользовательский код действия «Выполнить».
@@ -31,6 +32,8 @@ export interface RunActionContext {
 	text?: string; // В коде-парсера банка: весь текст PDF
 	rows?: unknown[]; // В коде-парсера банка: строки таблицы из координат
 	helpers?: Record<string, any>; // В коде-парсера банка: утилиты num/amount/date/hint
+	subLines?: Record<string, LocalLine[]>; // В коде печатной формы: строки ТЧ по имени табличной части
+	flowLayout?: typeof flowLayout; // В коде печатной формы: раскладка графа сценария (волны/связи/циклы)
 }
 
 // Выполнение JS-кода действия в браузере. Код — тело async-функции.
@@ -56,7 +59,9 @@ export async function runActionCode(code: string, ctx: RunActionContext): Promis
 		'importStatement',
 		'text',
 		'rows',
-		'helpers'
+		'helpers',
+		'subLines',
+		'flowLayout'
 	];
 	const values = paramNames.map((k) => (ctx as unknown as Record<string, unknown>)[k]);
 	const fn = new Function(...paramNames, `return (async () => {\n${code}\n})();`);

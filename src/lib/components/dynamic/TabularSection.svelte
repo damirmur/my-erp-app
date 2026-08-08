@@ -17,6 +17,9 @@
 	} = $props();
 	let selectedLineId = $state<string | null>(null);
 	let columns = $state<LocalColumn[]>([]);
+	let searchTerm = $state('');
+	let sortCol = $state<string | null>(null);
+	let sortDir = $state<'asc' | 'desc'>('asc');
 
 	// При открытии формы по ссылке на строку — сразу выделяем эту строку
 	$effect(() => {
@@ -134,6 +137,71 @@
 		}
 		if (onChange) onChange();
 	}
+
+	// Нормализация для поиска: нижний регистр, без диакритики (é→e), ё→е
+	function norm(s: string): string {
+		return s
+			.toLowerCase()
+			.normalize('NFD')
+			.replace(/[\u0300-\u036f]/g, '')
+			.replace(/ё/g, 'е');
+	}
+
+	// Умное сравнение значений колонок: числа — числом, universal — по v, пустые — в конец
+	function compareValues(a: unknown, b: unknown): number {
+		let ava = a;
+		let bv = b;
+		if (ava && typeof ava === 'object' && 'v' in (ava as object)) ava = (ava as any).v;
+		if (bv && typeof bv === 'object' && 'v' in (bv as object)) bv = (bv as any).v;
+		if (ava == null || ava === '') return bv == null || bv === '' ? 0 : 1;
+		if (bv == null || bv === '') return -1;
+		if (typeof ava === 'number' && typeof bv === 'number') return ava - bv;
+		return String(ava).localeCompare(String(bv), 'ru', { numeric: true });
+	}
+
+	// Вид строк: поиск + сортировка — только отображение, `lines` и sort_order не трогаем
+	let viewLines = $derived.by(() => {
+		let rows = lines;
+		const q = norm(searchTerm.trim());
+		if (q) {
+			rows = lines.filter((l) =>
+				columns.some((c) => norm(String(l.data?.[c.name] ?? '')).includes(q))
+			);
+		}
+		if (sortCol) {
+			const key = sortCol;
+			const dir = sortDir === 'asc' ? 1 : -1;
+			rows = [...rows].sort((a, b) => compareValues(a.data?.[key], b.data?.[key]) * dir);
+		}
+		return rows;
+	});
+
+	// Цикл сортировки колонки: первый клик — ↑, второй — ↓, третий — исходный порядок
+	function changeSort(colName: string) {
+		if (sortCol !== colName) {
+			sortCol = colName;
+			sortDir = 'asc';
+		} else if (sortDir === 'asc') {
+			sortDir = 'desc';
+		} else {
+			sortCol = null;
+			sortDir = 'asc';
+		}
+	}
+
+	function clearLines() {
+		if (lines.length === 0) return;
+		if (!confirm('Очистить все строки табличной части?')) return;
+		lines.length = 0;
+		selectedLineId = null;
+		if (onChange) onChange();
+	}
+
+	function resetView() {
+		searchTerm = '';
+		sortCol = null;
+		sortDir = 'asc';
+	}
 </script>
 
 <div class="tabular-section">
@@ -147,6 +215,14 @@
 			❌ Удалить строку
 		</button>
 		<button
+			onclick={clearLines}
+			class="btn-add btn-remove"
+			disabled={lines.length === 0 || readOnly}
+			title="Удалить все строки табличной части"
+		>
+			🧹 Очистить
+		</button>
+		<button
 			onclick={copyLineLink}
 			class="btn-add"
 			disabled={!selectedLineId}
@@ -154,58 +230,88 @@
 		>
 			🔗 Копировать ссылку строки
 		</button>
+		<input
+			type="search"
+			class="tabular-search"
+			bind:value={searchTerm}
+			placeholder="Поиск по строкам..."
+		/>
+		{#if searchTerm.trim() || sortCol}
+			<button onclick={resetView} class="btn-add" title="Сбросить поиск и сортировку">
+				Сброс
+			</button>
+			<span class="tabular-count">
+				Найдено {viewLines.length} / {lines.length}
+			</span>
+		{/if}
 	</div>
 
-	<table class="erp-table">
-		<thead>
-			<tr>
-				<th style="width: 40px;">№</th>
-				{#each columns as col}
-					<th>{col.title}</th>
-				{/each}
-			</tr>
-		</thead>
-		<tbody>
-			{#if lines.length === 0}
-				<tr><td colSpan={columns.length + 1} class="empty-text">Табличная часть пуста.</td></tr>
-			{:else}
-				{#each lines as line, index (line.id)}
-					<tr
-						class="tabular-row"
-						class:selected={selectedLineId === line.id}
-						onclick={() => {
-							// Выделение строки работает всегда, независимо от readOnly
-							// (проведён документ или нет) — редактирование полей
-							// ограничивается отдельно через disabled у полей.
-							selectedLineId = line.id;
-						}}
-					>
-						<td class="text-center">{index + 1}</td>
-						{#each columns as col}
-							<td>
-								{#if fieldRegistry[col.type]?.FormField}
-									{@const FC = fieldRegistry[col.type].FormField}
-									<FC
-										bind:value={line.data[col.name]}
-										disabled={readOnly || (hasAmountAuto && col.name === 'amount')}
-										onChange={(arg: any) => cellChange(col, line, arg)}
-										relatedTableId={col.related_table_id ?? ''}
-										{recordId}
-										candidates={col.type === 'linelink' ? linelinkCandidates : undefined}
-										options={col.type === 'select'
-											? selectOptionsFor(tableName, col.name)
-											: undefined}
-									/>
-								{:else}
-									{String(line.data[col.name] ?? '')}
-								{/if}
-							</td>
-						{/each}
+	<div class="tabular-scroll">
+		<table class="erp-table">
+			<thead>
+				<tr>
+					<th style="width: 40px;">№</th>
+					{#each columns as col}
+						<th
+							class="sortable-th"
+							class:sort-active={sortCol === col.name}
+							onclick={() => changeSort(col.name)}
+							title="Сортировать по «{col.title}»"
+						>
+							{col.title}
+							{#if sortCol === col.name}
+								<span class="sort-ind">{sortDir === 'asc' ? '▲' : '▼'}</span>
+							{/if}
+						</th>
+					{/each}
+				</tr>
+			</thead>
+			<tbody>
+				{#if viewLines.length === 0}
+					<tr>
+						<td colSpan={columns.length + 1} class="empty-text">
+							{lines.length === 0 ? 'Табличная часть пуста.' : 'Ничего не найдено.'}
+						</td>
 					</tr>
-				{/each}
-			{/if}
-		</tbody>
-	</table>
+				{:else}
+					{#each viewLines as line, index (line.id)}
+						<tr
+							class="tabular-row"
+							class:selected={selectedLineId === line.id}
+							onclick={() => {
+								// Выделение строки работает независимо от readOnly
+								// (проведён документ или нет) — редактирование полей
+								// ограничивается отдельно через disabled у полей.
+								selectedLineId = line.id;
+							}}
+						>
+							<td class="text-center">{index + 1}</td>
+							{#each columns as col}
+								<td>
+									{#if fieldRegistry[col.type]?.FormField}
+										{@const FC = fieldRegistry[col.type].FormField}
+										<FC
+											bind:value={line.data[col.name]}
+											disabled={readOnly || (hasAmountAuto && col.name === 'amount')}
+											onChange={(arg: any) => cellChange(col, line, arg)}
+											relatedTableId={col.related_table_id ?? ''}
+											{recordId}
+											candidates={col.type === 'linelink' ? linelinkCandidates : undefined}
+											options={col.type === 'select'
+												? selectOptionsFor(tableName, col.name)
+												: undefined}
+										/>
+									{:else}
+										{String(line.data[col.name] ?? '')}
+									{/if}
+								</td>
+							{/each}
+						</tr>
+					{/each}
+				{/if}
+			</tbody>
+		</table>
+	</div>
 </div>
 
 <style>
@@ -220,8 +326,44 @@
 	}
 	.tabular-actions {
 		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
 		gap: 6px;
 		margin-bottom: 8px;
+	}
+	.tabular-search {
+		flex: 0 1 220px;
+		padding: 5px 8px;
+		border: 1px solid #cbd5e1;
+		border-radius: 4px;
+		font-size: 0.8rem;
+		color: #334155;
+		box-sizing: border-box;
+	}
+	.tabular-count {
+		font-size: 0.75rem;
+		color: #64748b;
+	}
+	.sortable-th {
+		cursor: pointer;
+		user-select: none;
+	}
+	.sortable-th:hover {
+		background-color: #e2e8f0;
+	}
+	.sortable-th.sort-active {
+		background-color: #dbeafe;
+		color: #1e40af;
+	}
+	.sort-ind {
+		margin-left: 4px;
+		font-size: 0.7rem;
+	}
+	.tabular-scroll {
+		max-height: 50vh;
+		overflow-y: auto;
+		border: 1px solid #cbd5e1;
+		border-radius: 4px;
 	}
 	.btn-add {
 		background: #ffffff;

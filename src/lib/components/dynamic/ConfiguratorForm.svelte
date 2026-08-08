@@ -4,6 +4,7 @@
 	import { workspace } from '$lib/state/workspace.svelte';
 	import { syncService } from '$lib/services/sync';
 	import { fieldTypeList, fieldTypeLabel } from '$lib/fields';
+	import { toNameSlug, translateToName } from '$lib/services/nameAuto';
 	import LinkConfig from '$lib/fields/LinkConfig.svelte';
 	import LinelinkConfig from '$lib/fields/LinelinkConfig.svelte';
 	import { liveQuery } from 'dexie';
@@ -91,6 +92,13 @@
 	// Имя таблицы (черновик; лат., используется как ключ в ссылках #/t/{id|name})
 	let tableCodeName = $state('');
 
+	// Автоподстановка имени из синонима (переводчик → транслит). Имя заменяется
+	// только пока оно ещё «авто» (равно последнему автоподставленному/загруженному
+	// и пользователь его не правил вручную) и синоним реально изменился.
+	let tableSynonymAtLoad = $state('');
+	let tableNameAutoSlug = $state('');
+	let tableNameTouched = $state(false);
+
 	// Смена имени запрещена для таблиц, которые сиды находят по name
 	// (constant — «Константы», system — «История» и системные модули)
 	let canChangeName = $derived(
@@ -164,6 +172,9 @@
 		if (!selectedTableMeta) return;
 		tableSynonym = selectedTableMeta.title;
 		tableCodeName = selectedTableMeta.name ?? '';
+		tableSynonymAtLoad = selectedTableMeta.title;
+		tableNameAutoSlug = selectedTableMeta.name ?? '';
+		tableNameTouched = false;
 		selectedTypeDef = getTableType(selectedTableMeta.type);
 		selectedType = selectedTableMeta.type;
 		const effective = getEffectiveConfig(selectedTableMeta);
@@ -221,25 +232,78 @@
 		}
 	});
 
-	function genSlug(text: string, prefix = 'col'): string {
-		return (
-			text
-				.toLowerCase()
-				.replace(/[^a-z0-9]+/g, '_')
-				.replace(/^_|_$/g, '') || `${prefix}_${Date.now().toString(36)}`
-		);
+	// name из синонима: если синоним уже содержит латиницу — сразу slug;
+	// иначе (кириллица) — fallback с префиксом (как раньше genSlug).
+	function nameOrFallback(text: string, prefix: string): string {
+		return toNameSlug(text) || `${prefix}_${Date.now().toString(36)}`;
 	}
 
+	// Автоподстановка name из синонима (переводчик → транслит) с debounce.
+	// Заполняем только пока name пустое (как раньше с genSlug); ручной ввод
+	// останавливает подстановку. Токен отмены защищает от гонок: устаревший
+	// ответ не перезапишет свежий ввод.
+	let colTimer: ReturnType<typeof setTimeout> | null = null;
+	let colToken = 0;
 	$effect(() => {
-		if (newColTitle && !newColName) {
-			newColName = genSlug(newColTitle);
-		}
+		if (!newColTitle || newColName) return;
+		if (colTimer) clearTimeout(colTimer);
+		const token = ++colToken;
+		colTimer = setTimeout(async () => {
+			const name = await translateToName(newColTitle);
+			if (colToken === token && name && !newColName) {
+				newColName = name;
+			}
+		}, 600);
+		return () => {
+			if (colTimer) clearTimeout(colTimer);
+			colToken++;
+		};
 	});
 
+	let subTimer: ReturnType<typeof setTimeout> | null = null;
+	let subToken = 0;
 	$effect(() => {
-		if (newSubTitle && !newSubName) {
-			newSubName = genSlug(newSubTitle, 'tbl');
-		}
+		if (!newSubTitle || newSubName) return;
+		if (subTimer) clearTimeout(subTimer);
+		const token = ++subToken;
+		subTimer = setTimeout(async () => {
+			const name = await translateToName(newSubTitle);
+			if (subToken === token && name && !newSubName) {
+				newSubName = name;
+			}
+		}, 600);
+		return () => {
+			if (subTimer) clearTimeout(subTimer);
+			subToken++;
+		};
+	});
+
+	// Имя таблицы из синонима: только пока имя «авто» и синоним изменился
+	let tableTimer: ReturnType<typeof setTimeout> | null = null;
+	let tableToken = 0;
+	$effect(() => {
+		if (!canChangeName || tableNameTouched) return;
+		if (tableCodeName !== tableNameAutoSlug) return;
+		if (!tableSynonym.trim() || tableSynonym === tableSynonymAtLoad) return;
+		if (tableTimer) clearTimeout(tableTimer);
+		const token = ++tableToken;
+		tableTimer = setTimeout(async () => {
+			const name = await translateToName(tableSynonym);
+			if (
+				tableToken === token &&
+				name &&
+				!tableNameTouched &&
+				tableCodeName === tableNameAutoSlug
+			) {
+				tableCodeName = name;
+				tableNameAutoSlug = name;
+				tableSynonymAtLoad = tableSynonym;
+			}
+		}, 600);
+		return () => {
+			if (tableTimer) clearTimeout(tableTimer);
+			tableToken++;
+		};
 	});
 
 	// ===== Реквизиты (шапка и ТЧ) =====
@@ -263,7 +327,7 @@
 
 	function handleAddOrUpdateColumn(key: string) {
 		if (!newColTitle) return alert('Заполните заголовок реквизита!');
-		const colName = newColName || genSlug(newColTitle);
+		const colName = newColName || nameOrFallback(newColTitle, 'col');
 		const list = getColumnList(key);
 
 		if (editingKey === key && editingColKey) {
@@ -320,7 +384,7 @@
 	// ===== Табличные части =====
 	function handleAddSubTable() {
 		if (!newSubTitle) return alert('Заполните синоним ТЧ!');
-		const subName = newSubName || genSlug(newSubTitle, 'tbl');
+		const subName = newSubName || nameOrFallback(newSubTitle, 'tbl');
 		subTablesDraft.push({
 			key: crypto.randomUUID(),
 			dbId: null,
@@ -481,7 +545,10 @@
 			if (selectedTableMeta.type === 'constant' && editConfig.periodic) {
 				const hasChild = subTablesDraft.some((s) => !s.deleted);
 				if (!hasChild) {
-					const childName = genSlug(`${selectedTableMeta.name ?? 'constant'}_periods`, 'tbl');
+					const childName = nameOrFallback(
+						`${selectedTableMeta.name ?? 'constant'}_periods`,
+						'tbl'
+					);
 					const childId = await metadata.createNewTable(
 						'Периоды',
 						'tabular',
@@ -558,7 +625,10 @@
 						id="cfg-name"
 						type="text"
 						bind:value={tableCodeName}
-						oninput={markDirty}
+						oninput={() => {
+							tableNameTouched = true;
+							markDirty();
+						}}
 						placeholder="tasks, goods, documents..."
 						class="cfg-type-select"
 					/>

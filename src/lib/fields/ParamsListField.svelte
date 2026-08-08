@@ -195,24 +195,15 @@
 	{#each rows as row, i (row)}
 		<div class="param-row">
 			<div class="param-key-row">
+				<label class="param-label" for={`param-key-${i}`}>Имя параметра:</label>
 				<input
 					type="text"
+					id={`param-key-${i}`}
 					bind:value={row.key}
 					{disabled}
 					placeholder="ключ (например, kontragents)"
 					class="param-key-input"
 				/>
-				<select
-					class="param-type"
-					value={row.type}
-					{disabled}
-					title="Тип параметра"
-					onchange={(e) => changeType(i, e.currentTarget.value)}
-				>
-					{#each PARAM_TYPES as t}
-						<option value={t.value}>{t.label}</option>
-					{/each}
-				</select>
 				<button
 					type="button"
 					class="param-remove"
@@ -222,6 +213,21 @@
 				>
 					✕
 				</button>
+			</div>
+			<div class="param-type-row">
+				<label class="param-label" for={`param-type-${i}`}>Тип параметра:</label>
+				<select
+					class="param-type"
+					id={`param-type-${i}`}
+					value={row.type}
+					{disabled}
+					title="Тип параметра"
+					onchange={(e) => changeType(i, e.currentTarget.value)}
+				>
+					{#each PARAM_TYPES as t}
+						<option value={t.value}>{t.label}</option>
+					{/each}
+				</select>
 			</div>
 
 			{#if row.type === 'link'}
@@ -262,7 +268,7 @@
 						</div>
 					{/each}
 					<button type="button" class="param-add" {disabled} onclick={() => addValue(i)}>
-						＋ добавить запись
+						＋ добавить значение
 					</button>
 				</div>
 			{:else}
@@ -331,6 +337,16 @@
 		gap: 6px;
 	}
 	.param-key-row {
+		display: flex;
+		gap: 6px;
+		align-items: center;
+	}
+	.param-label {
+		flex-shrink: 0;
+		font-size: 0.8rem;
+		color: #64748b;
+	}
+	.param-type-row {
 		display: flex;
 		gap: 6px;
 		align-items: center;

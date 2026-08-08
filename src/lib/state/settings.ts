@@ -3,13 +3,12 @@ import { db, type LocalRecord } from '$lib/db/indexeddb';
 import { ensureTable } from '$lib/state/notifications';
 
 // Модуль настроек приложения: системная таблица app_settings (hiddenInMain).
-// Сейчас хранит один конфиг — порядок меню основного режима (ключ
-// main_nav_order): порядок групп типов (typeOrder) и порядок таблиц внутри
-// каждой группы (tableOrder). Таблица создаётся идемпотентно по паттерну
-// системной таблицы «История»; сама настройка — обычная запись data_records,
-// поэтому синхронизируется между устройствами и переживает «Полное обновление».
+// Каждая настройка — обычная запись data_records с ключом в data.key (например,
+// main_nav_order или translate_service), поэтому синхронизируется между
+// устройствами и переживает «Полное обновление».
 export const APP_SETTINGS_TABLE = 'app_settings';
 export const NAV_ORDER_KEY = 'main_nav_order';
+export const TRANSLATE_SERVICE_KEY = 'translate_service';
 
 // Конфиг порядка меню основного режима:
 //   typeOrder:  [typeName, ...]            — порядок групп (типов таблиц)
@@ -19,20 +18,40 @@ export interface NavOrderConfig {
 	tableOrder?: Record<string, string[]>;
 }
 
+// Конфиг автоперевода имён полей (синоним → name):
+//   serviceId  — запись каталога «Сервисы API» ('' = автоматический сид-переводчик)
+//   sourceLang — язык синонима ('' = язык браузера)
+//   targetLang — целевой язык name ('' = en)
+export interface TranslateConfig {
+	serviceId: string;
+	sourceLang: string;
+	targetLang: string;
+}
+
 async function findSettingsTable(): Promise<{ id: string } | null> {
 	return (await db.meta_tables.where('name').equals(APP_SETTINGS_TABLE).first()) ?? null;
 }
 
-// Запись-конфиг на сервере (по ключу). Фильтруем в JS, чтобы не зависеть от
+// Запись-настройка в локальном кэше по ключу.
+async function findSettingRecord(key: string): Promise<LocalRecord | null> {
+	const table = await findSettingsTable();
+	if (!table) return null;
+	return (
+		(await db.data_records.filter((r) => r.table_id === table.id && r.data?.key === key).first()) ??
+		null
+	);
+}
+
+// Запись-настройка на сервере по ключу. Фильтруем в JS, чтобы не зависеть от
 // синтаксиса JSONB-фильтров PostgREST (таблица маленькая).
-async function serverNavRecord(tableId: string): Promise<{ id: string } | null> {
+async function serverSettingRecord(tableId: string, key: string): Promise<{ id: string } | null> {
 	try {
 		const { data } = await supabase
 			.from('data_records')
 			.select('id, data')
 			.eq('table_id', tableId)
 			.limit(1000);
-		const rec = (data ?? []).find((r: any) => r.data?.key === NAV_ORDER_KEY);
+		const rec = (data ?? []).find((r: any) => r.data?.key === key);
 		return rec ? { id: rec.id } : null;
 	} catch {
 		return null;
@@ -45,32 +64,16 @@ export async function ensureSettingsTable(): Promise<string> {
 	return ensureTable(APP_SETTINGS_TABLE, 'Настройки', 'system', { hiddenInMain: true });
 }
 
-// Конфиг из локального кэша (без сети). Пустые поля — действует порядок по умолчанию.
-export async function loadNavOrder(): Promise<NavOrderConfig> {
-	const table = await findSettingsTable();
-	if (!table) return {};
-	const rec = await db.data_records
-		.filter((r) => r.table_id === table.id && r.data?.key === NAV_ORDER_KEY)
-		.first();
-	const data = rec?.data ?? {};
-	return {
-		typeOrder: Array.isArray(data.typeOrder) ? data.typeOrder : undefined,
-		tableOrder: data.tableOrder && typeof data.tableOrder === 'object' ? data.tableOrder : undefined
-	};
-}
-
-// Сохранение порядка: пишем локально (is_dirty=1, уедет обычным синком) и на
-// сервер, если онлайн. Idempotent — одна запись на ключ.
-export async function saveNavOrder(config: NavOrderConfig): Promise<void> {
+// Сохранение настройки: локально (is_dirty=1, уедет обычным синком) и на сервер,
+// если онлайн. Идемпотентно — одна запись на ключ.
+async function persistSettingRecord(key: string, data: Record<string, any>): Promise<void> {
 	const table = await findSettingsTable();
 	if (!table) throw new Error('Нет таблицы настроек приложения');
 
 	const online = typeof navigator === 'undefined' || navigator.onLine;
 	const now = new Date().toISOString();
-	const serverId = online ? ((await serverNavRecord(table.id))?.id ?? null) : null;
-	const local = await db.data_records
-		.filter((r) => r.table_id === table.id && r.data?.key === NAV_ORDER_KEY)
-		.first();
+	const serverId = online ? ((await serverSettingRecord(table.id, key))?.id ?? null) : null;
+	const local = await findSettingRecord(key);
 
 	const record: LocalRecord = {
 		id: local?.id ?? serverId ?? crypto.randomUUID(),
@@ -80,7 +83,7 @@ export async function saveNavOrder(config: NavOrderConfig): Promise<void> {
 		parent_id: null,
 		// Глубокая копия без Svelte $state-прокси: IndexedDB не может
 		// структурировано клонировать прокси (DataCloneError).
-		data: JSON.parse(JSON.stringify({ key: NAV_ORDER_KEY, ...config })),
+		data: JSON.parse(JSON.stringify({ key, ...data })),
 		is_dirty: 1,
 		updated_at: now
 	};
@@ -104,19 +107,16 @@ export async function saveNavOrder(config: NavOrderConfig): Promise<void> {
 	}
 }
 
-// Сброс порядка к стандартному: удаляем запись локально и на сервере.
-export async function clearNavOrder(): Promise<void> {
+async function deleteSettingRecord(key: string): Promise<void> {
 	const table = await findSettingsTable();
 	if (!table) return;
 
 	const online = typeof navigator === 'undefined' || navigator.onLine;
-	const local = await db.data_records
-		.filter((r) => r.table_id === table.id && r.data?.key === NAV_ORDER_KEY)
-		.first();
+	const local = await findSettingRecord(key);
 	if (local) await db.data_records.delete(local.id);
 
 	if (online) {
-		const serverId = (await serverNavRecord(table.id))?.id;
+		const serverId = (await serverSettingRecord(table.id, key))?.id;
 		if (serverId) {
 			try {
 				await supabase.from('data_records').delete().eq('id', serverId);
@@ -125,4 +125,38 @@ export async function clearNavOrder(): Promise<void> {
 			}
 		}
 	}
+}
+
+// Конфиг из локального кэша (без сети). Пустые поля — действует порядок по умолчанию.
+export async function loadNavOrder(): Promise<NavOrderConfig> {
+	const rec = await findSettingRecord(NAV_ORDER_KEY);
+	const data = rec?.data ?? {};
+	return {
+		typeOrder: Array.isArray(data.typeOrder) ? data.typeOrder : undefined,
+		tableOrder: data.tableOrder && typeof data.tableOrder === 'object' ? data.tableOrder : undefined
+	};
+}
+
+export async function saveNavOrder(config: NavOrderConfig): Promise<void> {
+	await persistSettingRecord(NAV_ORDER_KEY, config as Record<string, any>);
+}
+
+export async function clearNavOrder(): Promise<void> {
+	await deleteSettingRecord(NAV_ORDER_KEY);
+}
+
+// Конфиг автоперевода: пустые поля означают «по умолчанию»
+// (serviceId — сид-переводчик, sourceLang — язык браузера, targetLang — en).
+export async function loadTranslateConfig(): Promise<TranslateConfig> {
+	const rec = await findSettingRecord(TRANSLATE_SERVICE_KEY);
+	const d = rec?.data ?? {};
+	return {
+		serviceId: typeof d.serviceId === 'string' ? d.serviceId : '',
+		sourceLang: typeof d.sourceLang === 'string' ? d.sourceLang : '',
+		targetLang: typeof d.targetLang === 'string' ? d.targetLang : ''
+	};
+}
+
+export async function saveTranslateConfig(config: TranslateConfig): Promise<void> {
+	await persistSettingRecord(TRANSLATE_SERVICE_KEY, config as Record<string, any>);
 }

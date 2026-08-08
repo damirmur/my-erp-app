@@ -798,6 +798,22 @@ async function seedDefaults(
 				description:
 					'Координаты по наименованию: геокодинг OpenStreetMap (Nominatim). Параметр ${query} — наименование места, может быть на русском (URL-кодируется автоматически, accept-language=ru даёт русские названия). Ответ — JSON-массив мест; у первого результата координаты: res.data[0].lat и res.data[0].lon. Без прокси — прямой запрос из браузера (Nominatim разрешает CORS). Пример: apiCall(svc, { query: "Эрмитаж, Санкт-Петербург" }).'
 			}
+		},
+		{
+			data: {
+				number: '9',
+				name: 'astro3d — переводчик',
+				base_url: 'https://astro3d.ru/api/translate?q=${word}&tl=${langt}&sl=${langs}',
+				method: 'GET',
+				auth_type: 'none',
+				auth_param: '',
+				api_key: '',
+				headers: '{}',
+				proxy: '',
+				is_active: true,
+				description:
+					'Перевод слов с языка ${langs} на ${langt} (например, синонима в конфигураторе → латинское имя поля). Используется автоподстановкой name из синонима (см. «Сервис перевода» в конструкторе). Параметры: word — текст, langs — исходный язык, langt — целевой. Без прокси — прямой запрос из браузера (у astro3d.ru CORS открыт). Ответ: { translated_text, detected_language }. Пример: apiCall(svc, { word: "Контакты", langs: "ru", langt: "en" }).'
+			}
 		}
 	];
 
@@ -815,11 +831,15 @@ async function seedDefaults(
 		for (const row of rows) await seedRecord(row, online);
 	} else {
 		// Каталог уже заполнен (существующая установка): новые дефолтные записи
-		// (например, OpenStreetMap) досеиваем по name — только отсутствующие,
+		// (например, OpenStreetMap, переводчик) досеиваем — только отсутствующие,
 		// существующие (в т.ч. отредактированные вручную) не трогаем.
+		const existingBaseUrls = new Set(services.map((r) => r.data?.base_url));
 		for (const def of defs) {
 			const name = def.data.name;
 			if (!name || (await serviceExists(servicesId, name, online))) continue;
+			// Защита от дублей по URL: переводчик мог быть создан вручную под другим
+			// именем — такую запись не дублируем, берём её как есть.
+			if (def.data.base_url && existingBaseUrls.has(def.data.base_url)) continue;
 			await seedRecord(
 				{
 					id: def.id ?? crypto.randomUUID(),

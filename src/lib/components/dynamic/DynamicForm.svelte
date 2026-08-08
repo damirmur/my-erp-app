@@ -485,6 +485,17 @@
 		if (updated) {
 			recordData = { ...(updated.data ?? {}) };
 		}
+		// Код действия мог записать/заменить строки ТЧ напрямую в Dexie —
+		// перечитываем их, чтобы форма показала актуальные строки.
+		const allLineRows = await db.data_lines.where('record_id').equals(recordId).toArray();
+		const newBackup: Record<string, LocalLine[]> = {};
+		for (const sub of objectSubTables) {
+			newBackup[sub.id] = allLineRows
+				.filter((l) => l.table_id === sub.id)
+				.sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+		}
+		subTableBackup = newBackup;
+		restoreLinesToActive();
 		workspace.setDirty(tabId, false);
 		// Сценарий (flow): прогон пишется в историю, панель «API» — только при
 		// ошибке. Для остальных кодов: при ошибке или реальном возвращаемом значении.

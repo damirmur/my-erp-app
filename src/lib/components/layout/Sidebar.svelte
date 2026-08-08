@@ -1,15 +1,18 @@
 <script lang="ts">
-	import { db, type LocalTable } from '$lib/db/indexeddb';
+	import { db, type LocalRecord, type LocalTable } from '$lib/db/indexeddb';
 	import { workspace } from '$lib/state/workspace.svelte';
 	import { metadata } from '$lib/state/metadata';
 	import { syncService } from '$lib/services/sync';
 	import { liveQuery } from 'dexie';
 	import { tableTypeList, deleteTableTypeFromDB, createTableTypeFromBase } from '$lib/table-types';
+	import { translit } from '$lib/services/nameAuto';
 	import {
 		APP_SETTINGS_TABLE,
 		NAV_ORDER_KEY,
+		TRANSLATE_SERVICE_KEY,
 		clearNavOrder as resetPersistedNavOrder,
-		saveNavOrder as persistNavOrder
+		saveNavOrder as persistNavOrder,
+		saveTranslateConfig as persistTranslateConfig
 	} from '$lib/state/settings';
 
 	// Порядок встроенных групп в сайдбаре; кастомные типы идут после
@@ -288,6 +291,81 @@
 		draftTableOrder = {};
 	}
 
+	// ---- Настройка «Сервис перевода» (автоперевод имён полей из синонима) ----
+	// Выбор сервиса-переводчика из каталога «Сервисы API» + языки (пусто = по
+	// умолчанию: источник — язык браузера, цель — en). Конфиг живёт в app_settings
+	// (ключ translate_service) и используется конфигуратором через nameAuto.
+	let translateServices = $state<LocalRecord[]>([]);
+	let translateConfig = $state<{ serviceId: string; sourceLang: string; targetLang: string }>({
+		serviceId: '',
+		sourceLang: '',
+		targetLang: ''
+	});
+
+	$effect(() => {
+		const observable = liveQuery(async () => {
+			const table = await db.meta_tables.where('name').equals('api_services').first();
+			if (!table) return [];
+			return await db.data_records.where('table_id').equals(table.id).toArray();
+		});
+		const subscription = observable.subscribe({
+			next: (records) => {
+				translateServices = records;
+			},
+			error: (err) => console.error('Ошибка чтения сервисов API:', err)
+		});
+		return () => subscription.unsubscribe();
+	});
+
+	$effect(() => {
+		const observable = liveQuery(async () => {
+			const table = await db.meta_tables.where('name').equals(APP_SETTINGS_TABLE).first();
+			if (!table) return null;
+			const rows = await db.data_records.where('table_id').equals(table.id).toArray();
+			return rows.find((r) => r.data?.key === TRANSLATE_SERVICE_KEY) ?? null;
+		});
+		const subscription = observable.subscribe({
+			next: (rec) => {
+				const d = rec?.data ?? {};
+				translateConfig = {
+					serviceId: typeof d.serviceId === 'string' ? d.serviceId : '',
+					sourceLang: typeof d.sourceLang === 'string' ? d.sourceLang : '',
+					targetLang: typeof d.targetLang === 'string' ? d.targetLang : ''
+				};
+			},
+			error: (err) => console.error('Ошибка чтения настроек перевода:', err)
+		});
+		return () => subscription.unsubscribe();
+	});
+
+	async function handleTranslateServiceChange(e: Event) {
+		translateConfig = {
+			...translateConfig,
+			serviceId: (e.currentTarget as HTMLSelectElement).value
+		};
+		try {
+			await persistTranslateConfig(translateConfig);
+		} catch (err: any) {
+			alert(`Ошибка сохранения настроек перевода: ${err?.message ?? err}`);
+		}
+	}
+
+	function handleTranslateSourceChange(e: Event) {
+		translateConfig = {
+			...translateConfig,
+			sourceLang: (e.currentTarget as HTMLInputElement).value.trim()
+		};
+		persistTranslateConfig(translateConfig).catch(() => {});
+	}
+
+	function handleTranslateTargetChange(e: Event) {
+		translateConfig = {
+			...translateConfig,
+			targetLang: (e.currentTarget as HTMLInputElement).value.trim()
+		};
+		persistTranslateConfig(translateConfig).catch(() => {});
+	}
+
 	// Раскрытые строки дерева таблиц (в конструкторе)
 	let expandedTables = $state<Record<string, boolean>>({});
 
@@ -355,52 +433,6 @@
 	}
 
 	// ---- Типы таблиц: создание и удаление ----
-	const translitMap: Record<string, string> = {
-		а: 'a',
-		б: 'b',
-		в: 'v',
-		г: 'g',
-		д: 'd',
-		е: 'e',
-		ё: 'e',
-		ж: 'zh',
-		з: 'z',
-		и: 'i',
-		й: 'y',
-		к: 'k',
-		л: 'l',
-		м: 'm',
-		н: 'n',
-		о: 'o',
-		п: 'p',
-		р: 'r',
-		с: 's',
-		т: 't',
-		у: 'u',
-		ф: 'f',
-		х: 'h',
-		ц: 'ts',
-		ч: 'ch',
-		ш: 'sh',
-		щ: 'sch',
-		ъ: '',
-		ы: 'y',
-		ь: '',
-		э: 'e',
-		ю: 'yu',
-		я: 'ya'
-	};
-
-	function translit(text: string): string {
-		return text
-			.toLowerCase()
-			.split('')
-			.map((ch) => translitMap[ch] ?? ch)
-			.join('')
-			.replace(/[^a-z0-9]+/g, '_')
-			.replace(/^_|_$/g, '');
-	}
-
 	let creatingType = $state(false);
 	let newTypeLabel = $state('');
 	let newTypeName = $state('');
@@ -657,6 +689,53 @@
 								<button onclick={cancelNavOrder} class="type-btn">Отмена</button>
 							</div>
 						{/if}
+					</div>
+
+					<div class="navorder-section">
+						<div class="group-header-row">
+							<span class="group-title">🌐 Сервис перевода</span>
+						</div>
+						<div class="translate-config">
+							<label class="translate-label">
+								Переводчик (синоним → имя поля)
+								<select
+									bind:value={translateConfig.serviceId}
+									onchange={handleTranslateServiceChange}
+									class="translate-select"
+								>
+									<option value="">— автоматически (astro3d переводчик) —</option>
+									{#each translateServices as svc}
+										<option value={svc.id}>{svc.data?.name || 'Сервис'}</option>
+									{/each}
+								</select>
+							</label>
+							<div class="translate-langs">
+								<label class="translate-label">
+									Язык синонима
+									<input
+										type="text"
+										bind:value={translateConfig.sourceLang}
+										oninput={handleTranslateSourceChange}
+										placeholder="напр. ru (пусто = язык браузера)"
+										class="translate-input"
+									/>
+								</label>
+								<label class="translate-label">
+									Язык имени
+									<input
+										type="text"
+										bind:value={translateConfig.targetLang}
+										oninput={handleTranslateTargetChange}
+										placeholder="напр. en"
+										class="translate-input"
+									/>
+								</label>
+							</div>
+							<div class="navorder-hint">
+								Используется в конфигураторе при вводе синонима: name подставляется переводом (или
+								транслитерацией, если сервис/интернет недоступны).
+							</div>
+						</div>
 					</div>
 
 					<div class="types-section">
@@ -972,6 +1051,43 @@
 		display: flex;
 		gap: 6px;
 		margin-top: 0.5rem;
+	}
+	.translate-config {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+		padding: 0 0.25rem;
+	}
+	.translate-label {
+		display: flex;
+		flex-direction: column;
+		gap: 3px;
+		font-size: 0.7rem;
+		font-weight: 600;
+		color: #6b7280;
+	}
+	.translate-select,
+	.translate-input {
+		width: 100%;
+		box-sizing: border-box;
+		padding: 4px 6px;
+		border: 1px solid #cbd5e1;
+		border-radius: 0.25rem;
+		font-size: 0.8rem;
+		color: #1f2937;
+		outline: none;
+	}
+	.translate-langs {
+		display: flex;
+		gap: 6px;
+	}
+	.translate-langs .translate-label {
+		flex: 1;
+	}
+	.navorder-hint {
+		font-size: 0.68rem;
+		color: #9ca3af;
+		line-height: 1.3;
 	}
 	.create-type-form {
 		display: flex;

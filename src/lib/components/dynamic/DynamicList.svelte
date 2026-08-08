@@ -343,7 +343,7 @@
 				await db.data_lines.put({
 					id: crypto.randomUUID(),
 					record_id: newRecordId,
-					table_id: tableId,
+					table_id: line.table_id,
 					data: { ...line.data },
 					sort_order: line.sort_order
 				});

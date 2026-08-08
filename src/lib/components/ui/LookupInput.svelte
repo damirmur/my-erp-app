@@ -21,10 +21,11 @@
 
 	let searchQuery = $state('');
 	let isOpen = $state(false);
-	let suggestions = $state<LocalRecord[]>([]);
 	// Заголовки таблиц для универсального поиска (когда targetTableId не задан)
 	let tableTitles = $state<Record<string, string>>({});
 	let dropdownRef = $state<HTMLDivElement | null>(null);
+	// Все записи выбранной таблицы (живая подписка); фильтрация по тексту — отдельно.
+	let scopeRecords = $state<LocalRecord[]>([]);
 
 	// Значение поля — id выбранной записи (как в 1С: «Ссылка» = id).
 	// displayName — наименование этой записи для отображения в закрытом состоянии.
@@ -51,7 +52,7 @@
 		};
 	});
 
-	// Подписка на живой поиск в IndexedDB
+	// Подписка на живой список записей выбранной таблицы (IndexedDB)
 	$effect(() => {
 		if (!isOpen) return;
 
@@ -59,37 +60,48 @@
 			// targetTableId задан — ищем в конкретном справочнике;
 			// пуст — универсальный поиск по всем таблицам верхнего уровня
 			// (нужно для «Универсального» поля со ссылкой на любую таблицу).
-			let records: LocalRecord[];
-			let titles: Record<string, string> = {};
 			if (targetTableId) {
-				records = await db.data_records.where('table_id').equals(targetTableId).toArray();
-			} else {
-				const tables = await db.meta_tables.filter((t) => !t.parent_table_id).toArray();
-				titles = Object.fromEntries(tables.map((t) => [t.id, t.title]));
-				const topIds = new Set(tables.map((t) => t.id));
-				const all = await db.data_records.toArray();
-				records = all.filter((r) => topIds.has(r.table_id));
+				return await db.data_records.where('table_id').equals(targetTableId).toArray();
 			}
-
-			const q = searchQuery.toLowerCase();
-			return {
-				records: records.filter(
-					(r) => (!filter || filter(r)) && (r.data.name || '').toLowerCase().includes(q)
-				),
-				titles
-			};
+			const tables = await db.meta_tables.filter((t) => !t.parent_table_id).toArray();
+			const topIds = new Set(tables.map((t) => t.id));
+			const all = await db.data_records.toArray();
+			return all.filter((r) => topIds.has(r.table_id));
 		});
 
 		const sub = observable.subscribe({
 			next: (data) => {
-				suggestions = data.records;
-				tableTitles = data.titles;
+				scopeRecords = data;
 			},
 			error: (err) => console.error('Ошибка поиска в справочнике:', err)
 		});
 
 		return () => sub.unsubscribe();
 	});
+
+	// Заголовки таблиц для универсального поиска (когда targetTableId не задан)
+	$effect(() => {
+		if (targetTableId) return;
+		let cancelled = false;
+		db.meta_tables
+			.filter((t) => !t.parent_table_id)
+			.toArray()
+			.then((tables) => {
+				if (!cancelled) tableTitles = Object.fromEntries(tables.map((t) => [t.id, t.title]));
+			});
+		return () => {
+			cancelled = true;
+		};
+	});
+
+	// Отфильтрованные по тексту поиска кандидаты (реактивно к searchQuery)
+	let suggestions = $derived(
+		scopeRecords.filter(
+			(r) =>
+				(!filter || filter(r)) &&
+				(r.data.name || '').toLowerCase().includes(searchQuery.toLowerCase())
+		)
+	);
 
 	function handleSelect(record: LocalRecord) {
 		value = record.id; // Прямая мутация переменной, разрешенной для $bindable

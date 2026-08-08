@@ -3,6 +3,7 @@
 	import { workspace } from '$lib/state/workspace.svelte';
 	import { autoFillDocumentFields, todayIso } from '$lib/services/numbers';
 	import { printerService } from '$lib/services/printer';
+	import { deliverService } from '$lib/services/deliver';
 	import { getTableType, getEffectiveConfig } from '$lib/table-types';
 	import { formatFieldValue } from '$lib/fields';
 	import { physicalDeleteRecords } from '$lib/services/records';
@@ -289,6 +290,15 @@
 			case 'print':
 				handleListPrint(printFormId);
 				break;
+			case 'preview':
+				await handleListPreview(printFormId);
+				break;
+			case 'send':
+				await handleListSend(printFormId);
+				break;
+			case 'download':
+				await handleListDownload(printFormId);
+				break;
 			case 'run':
 				await handleRun();
 				break;
@@ -450,6 +460,53 @@
 			.map((r) => r.id);
 		if (cleanIds.length === 0) return alert('Выберите документы для печати (папки не печатаются)');
 		printerService.printRecords(tableId, cleanIds, formId);
+	}
+
+	// 👁 На экране: рендер документа и показ в модале предпросмотра.
+	async function handleListPreview(formId = '') {
+		const cleanIds = filteredAndSortedRecords
+			.filter((r) => selectedIds.includes(r.id) && !r.is_folder)
+			.map((r) => r.id);
+		if (cleanIds.length === 0)
+			return alert('Выберите документы для просмотра (папки не показываются)');
+		try {
+			const render = await printerService.renderRecords(tableId, cleanIds, formId);
+			workspace.openPrintPreview(render.html, render.title);
+		} catch (e: any) {
+			alert(e?.message ?? String(e));
+		}
+	}
+
+	// ✉️ Отправить: рендер документа → создание документа «Сообщение» с вложением
+	// и предложением добавить контрагента в получатели. Сообщение открывается
+	// для дозаполнения и отправки кнопкой «▶️ Выполнить».
+	async function handleListSend(formId = '') {
+		const cleanIds = filteredAndSortedRecords
+			.filter((r) => selectedIds.includes(r.id) && !r.is_folder)
+			.map((r) => r.id);
+		if (cleanIds.length === 0) return alert('Выберите документы для отправки');
+		const label = `${tableMeta?.title ?? 'Документ'} · Отправить`;
+		const href = cleanIds.length > 0 ? buildRecordUrl(cleanIds[0]) : '';
+		try {
+			await deliverService.sendDocuments(tableId, cleanIds, formId);
+		} catch (e: any) {
+			workspace.showApiResult({
+				href,
+				label,
+				ok: false,
+				error: e?.message ?? String(e),
+				executedAt: new Date().toISOString()
+			});
+		}
+	}
+
+	// 💾 Скачать: рендер документа и сохранение HTML-файла.
+	async function handleListDownload(formId = '') {
+		const cleanIds = filteredAndSortedRecords
+			.filter((r) => selectedIds.includes(r.id) && !r.is_folder)
+			.map((r) => r.id);
+		if (cleanIds.length === 0) return alert('Выберите документы для скачивания');
+		await printerService.downloadRecords(tableId, cleanIds, formId);
 	}
 
 	// ▶️ Выполнить: код действия по выбранным записям (или декларативный вызов

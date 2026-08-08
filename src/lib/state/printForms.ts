@@ -58,6 +58,27 @@ function printFormColumns(): Omit<LocalColumn, 'id' | 'table_id'>[] {
 			sort_order: 50,
 			is_visible: true
 		},
+		{
+			name: 'delivery',
+			title: 'Способы вывода (print,screen,send,download)',
+			type: 'string',
+			sort_order: 55,
+			is_visible: false
+		},
+		{
+			name: 'output_format',
+			title: 'Формат вывода (html|svg)',
+			type: 'string',
+			sort_order: 56,
+			is_visible: false
+		},
+		{
+			name: 'summary',
+			title: 'Выжимка для сообщения',
+			type: 'textarea',
+			sort_order: 57,
+			is_visible: false
+		},
 		{ name: 'sort_order', title: 'Порядок', type: 'number', sort_order: 60, is_visible: true }
 	];
 }

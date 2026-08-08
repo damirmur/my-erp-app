@@ -56,6 +56,10 @@ class WorkspaceManager {
 	// #/r/{id}.execute({...}).json) или возвращаемое значение «▶️ Выполнить».
 	apiResult = $state<ApiCommandResult | null>(null);
 
+	// Предпросмотр документа: отрендеренная печатная форма для показа на экране
+	// (кнопка «👁 На экране»). Показывается в PrintPreviewModal без автопечати.
+	printPreview = $state<{ html: string; title: string } | null>(null);
+
 	// Таблицы-константы, форма которых уже открывалась автоматически (или закрыта вручную).
 	// Подавление переживает перемонтирование списка и сбрасывается при открытии списка заново.
 	private constantFormOpened = new Set<string>();
@@ -471,6 +475,15 @@ class WorkspaceManager {
 	// 14. Закрыть панель «API»
 	closeApiResult() {
 		this.apiResult = null;
+	}
+
+	// 15. Предпросмотр отрендеренной печатной формы (кнопка «👁 На экране»)
+	openPrintPreview(html: string, title: string) {
+		this.printPreview = { html, title };
+	}
+
+	closePrintPreview() {
+		this.printPreview = null;
 	}
 }
 

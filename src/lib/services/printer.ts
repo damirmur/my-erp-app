@@ -255,18 +255,95 @@ async function replaceAsync(
 	return parts.join('');
 }
 
+// ==== Вспомогательные функции вывода ====
+
+// Полный HTML-документ для предпросмотра/печати (standalone: head + стили).
+function buildPrintDocument(title: string, bodyHtml: string): string {
+	return `<html>
+<head>
+	<title>${escapeHtml(title)}</title>
+	<style>
+		body { margin: 0; padding: 0; background: #fff; }
+		.print-item { box-sizing: border-box; }
+		.page-break { page-break-after: always; break-after: page; clear: both; }
+		@media print {
+			body { padding: 0; }
+			.page-break { page-break-after: always; break-after: page; }
+		}
+	</style>
+</head>
+<body>
+	${bodyHtml}
+</body>
+</html>`;
+}
+
+// Извлечение простого текста из отрендеренного HTML (для мессенджеров/e-mail).
+export function htmlToText(html: string): string {
+	let text = html
+		.replace(/<script[\s\S]*?<\/script>/gi, '')
+		.replace(/<style[\s\S]*?<\/style>/gi, '')
+		.replace(/<\/(p|div|tr|h[1-6]|li|table|section|article)>/gi, '\n')
+		.replace(/<(br|hr)\s*\/?>/gi, '\n')
+		.replace(/<\/t[dh]>/gi, '\t')
+		.replace(/<[^>]+>/g, '');
+	if (typeof document !== 'undefined') {
+		const el = document.createElement('div');
+		el.innerHTML = text;
+		text = el.textContent ?? '';
+	}
+	return text
+		.replace(/[ \t]+\n/g, '\n')
+		.replace(/\n{3,}/g, '\n\n')
+		.trim();
+}
+
+// Base64 из строки с юникодом (UTF-8), для вложения HTML-файла.
+export function htmlToBase64(html: string): string {
+	const bytes = new TextEncoder().encode(html);
+	let binary = '';
+	const chunk = 0x8000;
+	for (let i = 0; i < bytes.length; i += chunk) {
+		binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+	}
+	return btoa(binary);
+}
+
+// Извлечение первого <svg> из отрендеренного HTML (для печатных форм с
+// output_format='svg', например «Сценарий» — код возвращает данные, а шаблон
+// рисует <svg> с графом).
+function extractSvg(html: string): string {
+	if (typeof document === 'undefined') {
+		const m = html.match(/<svg[\s\S]*?<\/svg>/i);
+		return m ? m[0] : '';
+	}
+	try {
+		const doc = new DOMParser().parseFromString(html, 'text/html');
+		const svg = doc.querySelector('svg');
+		return svg ? svg.outerHTML : '';
+	} catch {
+		return '';
+	}
+}
+
+export interface RenderResult {
+	html: string; // Полный HTML-документ (head + стили + записи) — для предпросмотра/печати/скачивания
+	title: string; // Заголовок документа (таблица или таблица + номера записей)
+	count: number; // Сколько записей отрендерено
+	formId: string; // Какая печатная форма использовалась
+	format: 'html' | 'svg'; // Формат вывода (колонка output_format печатной формы)
+	svg?: string; // Извлечённый <svg> (когда format='svg', первая запись)
+	summary: string; // Выжимка из колонки summary (рендер движком; '' если не задана)
+}
+
 export const printerService = {
 	/**
-	 * Универсальная печать одного или нескольких документов по их ID.
+	 * Универсальный рендер одного или нескольких документов по их ID.
 	 * formId — конкретная печатная форма; если пусто — дефолтная (is_default)
-	 * или первая в порядке sort_order.
+	 * или первая в порядке sort_order. Возвращает полный HTML-документ —
+	 * из него можно печатать, показывать на экране, скачивать или отправлять.
 	 */
-	async printRecords(tableId: string, recordIds: string[], formId = '') {
-		if (recordIds.length === 0) {
-			alert('Не выбраны записи для печати.');
-			return;
-		}
-
+	async renderRecords(tableId: string, recordIds: string[], formId = ''): Promise<RenderResult> {
 		const metaTable = await db.meta_tables.get(tableId);
 		const tableTitle = metaTable ? metaTable.title : 'Документ';
 
@@ -281,13 +358,19 @@ export const printerService = {
 
 		let templateHtml = '';
 		let fillCode = '';
+		let usedFormId = '';
+		let outputFormat: 'html' | 'svg' = 'html';
+		let summaryTemplate = '';
 		if (formsForTable.length > 0) {
 			const chosen = formId
 				? formsForTable.find((f) => f.id === formId)
 				: formsForTable.find((f) => f.data?.is_default === true || f.data?.is_default === 1);
 			const form = chosen ?? formsForTable[0];
+			usedFormId = form?.id ?? '';
 			templateHtml = form?.data?.template_html ?? '';
 			fillCode = form?.data?.code ?? '';
+			outputFormat = form?.data?.output_format === 'svg' ? 'svg' : 'html';
+			summaryTemplate = String(form?.data?.summary ?? '').trim();
 		}
 		if (!templateHtml) templateHtml = FALLBACK_TEMPLATE;
 
@@ -307,9 +390,12 @@ export const printerService = {
 
 		// 2. Циклом собираем HTML для всех переданных записей
 		let finalFullHtml = '';
+		let renderedCount = 0;
+		const summaries: string[] = [];
 		for (let i = 0; i < recordIds.length; i++) {
 			const record = await db.data_records.get(recordIds[i]);
 			if (!record) continue;
+			renderedCount++;
 
 			const lines = await db.data_lines.where('record_id').equals(record.id).toArray();
 
@@ -376,40 +462,95 @@ export const printerService = {
 				});
 			}
 
+			// Выжимка: колонка summary печатной формы рендерится тем же движком
+			// (доступны {{doc.*}}, {{sum:<ТЧ>:<поле>}}, {{count:<ТЧ>}}, {{#each <ТЧ>}}),
+			// результат приводится к простому тексту для сообщения.
+			if (summaryTemplate) {
+				const recSummary = await renderTemplate(summaryTemplate, {
+					record,
+					tableTitle,
+					columns,
+					subTables,
+					lines,
+					resolveLink
+				});
+				summaries.push(htmlToText(recSummary));
+			}
+
 			const pageBreak = i < recordIds.length - 1 ? '<div class="page-break"></div>' : '';
 			finalFullHtml += `<div class="print-item">${rendered}</div>${pageBreak}`;
 		}
 
-		// 3. Открываем универсальное окно печати
+		if (renderedCount === 0) throw new Error('Не найдены записи для вывода документа');
+
+		return {
+			html: buildPrintDocument(`${tableTitle} (${renderedCount})`, finalFullHtml),
+			title: tableTitle,
+			count: renderedCount,
+			formId: usedFormId,
+			format: outputFormat,
+			svg: outputFormat === 'svg' ? extractSvg(finalFullHtml) || undefined : undefined,
+			summary: summaries.join('\n\n')
+		};
+	},
+
+	/**
+	 * Универсальная печать одного или нескольких документов по их ID.
+	 * formId — конкретная печатная форма; если пусто — дефолтная (is_default)
+	 * или первая в порядке sort_order.
+	 */
+	async printRecords(tableId: string, recordIds: string[], formId = '') {
+		if (recordIds.length === 0) {
+			alert('Не выбраны записи для печати.');
+			return;
+		}
+
+		let render: RenderResult;
+		try {
+			render = await this.renderRecords(tableId, recordIds, formId);
+		} catch (e: any) {
+			alert(e?.message ?? String(e));
+			return;
+		}
+
 		const printWindow = window.open('', '_blank');
 		if (!printWindow) {
 			alert('Браузер заблокировал всплывающее окно. Разрешите всплывающие окна в настройках.');
 			return;
 		}
 
-		printWindow.document.documentElement.innerHTML = `
-            <html>
-            <head>
-                <title>Печать документов пакетно</title>
-                <style>
-                    body { margin: 0; padding: 0; background: #fff; }
-                    .print-item { box-sizing: border-box; }
-                    .page-break { page-break-after: always; break-after: page; clear: both; }
-                    @media print {
-                        body { padding: 0; }
-                        .page-break { page-break-after: always; break-after: page; }
-                    }
-                </style>
-            </head>
-            <body>
-                ${finalFullHtml}
-            </body>
-            </html>
-        `;
+		printWindow.document.documentElement.innerHTML = render.html;
 
 		setTimeout(() => {
 			printWindow.print();
 			printWindow.close();
 		}, 400);
+	},
+
+	/**
+	 * Скачивание документа как HTML-файла (для ручной отправки вложением).
+	 */
+	async downloadRecords(tableId: string, recordIds: string[], formId = '') {
+		if (recordIds.length === 0) {
+			alert('Не выбраны записи для скачивания.');
+			return;
+		}
+		let render: RenderResult;
+		try {
+			render = await this.renderRecords(tableId, recordIds, formId);
+		} catch (e: any) {
+			alert(e?.message ?? String(e));
+			return;
+		}
+
+		const blob = new Blob([render.html], { type: 'text/html;charset=utf-8' });
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = `${render.title}.html`;
+		document.body.appendChild(a);
+		a.click();
+		document.body.removeChild(a);
+		URL.revokeObjectURL(url);
 	}
 };

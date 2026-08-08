@@ -2,6 +2,7 @@
 	import Sidebar from '$lib/components/layout/Sidebar.svelte';
 	import Workspace from '$lib/components/layout/Workspace.svelte';
 	import ApiResultModal from '$lib/components/layout/ApiResultModal.svelte';
+	import PrintPreviewModal from '$lib/components/layout/PrintPreviewModal.svelte';
 	import { syncService } from '$lib/services/sync';
 	import { syncTableTypes } from '$lib/table-types';
 	import { workspace } from '$lib/state/workspace.svelte';
@@ -44,6 +45,7 @@
 </div>
 
 <ApiResultModal />
+<PrintPreviewModal />
 
 <style>
 	:global(body) {

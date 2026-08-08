@@ -90,7 +90,8 @@ if (groups.length === 0) throw new Error('Нет получателей с за�
 
 // 3. Тело запроса (без channels — они добавляются по каждой группе)
 const body = {
-	message: String(record.data.message || record.data.subject || '').slice(0, 4000)
+	message: String(record.data.message || record.data.subject || '').slice(0, 4000),
+	subject: String(record.data.subject || '').slice(0, 200)
 };
 if (record.data.file && record.data.file.data) {
 	body.file = { name: record.data.file.name || 'file', data: record.data.file.data };
@@ -813,6 +814,22 @@ async function seedDefaults(
 				is_active: true,
 				description:
 					'Перевод слов с языка ${langs} на ${langt} (например, синонима в конфигураторе → латинское имя поля). Используется автоподстановкой name из синонима (см. «Сервис перевода» в конструкторе). Параметры: word — текст, langs — исходный язык, langt — целевой. Без прокси — прямой запрос из браузера (у astro3d.ru CORS открыт). Ответ: { translated_text, detected_language }. Пример: apiCall(svc, { word: "Контакты", langs: "ru", langt: "en" }).'
+			}
+		},
+		{
+			data: {
+				number: '10',
+				name: 'Renderer — HTML/SVG в PNG/PDF',
+				base_url: 'https://astro3d.ru/api/render',
+				method: 'POST',
+				auth_type: 'query',
+				auth_param: 'notify_key',
+				api_key: '',
+				headers: '{}',
+				proxy: proxyId,
+				is_active: true,
+				description:
+					'Рендер HTML или SVG в PNG/PDF серверным браузером (chrome-headless-shell). Вызов из кода: apiCall(svc, {}, { kind: "html"|"svg", html: "<h1>Отчёт</h1>", svg: "<svg...>", width: 794, format: "png"|"pdf" }). Ответ: { data: base64, content_type }. Идёт через прокси (поле «Прокси»), «Ключ доступа» — тот же NOTIFY_KEY, что у сервиса уведомлений.'
 			}
 		}
 	];

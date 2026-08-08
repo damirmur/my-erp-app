@@ -8,6 +8,7 @@
 	} from '$lib/db/indexeddb';
 	import { workspace } from '$lib/state/workspace.svelte';
 	import { printerService } from '$lib/services/printer';
+	import { deliverService } from '$lib/services/deliver';
 	import { autoFillDocumentFields, todayIso } from '$lib/services/numbers';
 	import { physicalDeleteRecords } from '$lib/services/records';
 	import { runRecordAction } from '$lib/services/actionRunner';
@@ -478,6 +479,15 @@
 			case 'print':
 				printerService.printRecords(tableId, [recordId], printFormId);
 				break;
+			case 'preview':
+				await handleFormPreview(printFormId);
+				break;
+			case 'send':
+				await handleFormSend(printFormId);
+				break;
+			case 'download':
+				await handleFormDownload(printFormId);
+				break;
 			case 'run':
 				await handleRun();
 				break;
@@ -496,6 +506,43 @@
 		} catch {
 			alert('Не удалось скопировать ссылку: ' + url);
 		}
+	}
+
+	// 👁 На экране: рендер документа по текущей записи и показ в модале предпросмотра.
+	async function handleFormPreview(printFormId = '') {
+		if (recordId === 'new') return alert('Сначала сохраните запись');
+		try {
+			const render = await printerService.renderRecords(tableId, [recordId], printFormId);
+			workspace.openPrintPreview(render.html, render.title);
+		} catch (e: any) {
+			alert(e?.message ?? String(e));
+		}
+	}
+
+	// ✉️ Отправить: рендер документа → создание документа «Сообщение» с вложением
+	// и предложением добавить контрагента в получатели. Сообщение открывается
+	// для дозаполнения и отправки кнопкой «▶️ Выполнить».
+	async function handleFormSend(printFormId = '') {
+		if (recordId === 'new') return alert('Сначала сохраните запись');
+		const label = `${tableTitle} · Отправить`;
+		const href = buildRecordUrl(recordId);
+		try {
+			await deliverService.sendDocuments(tableId, [recordId], printFormId);
+		} catch (e: any) {
+			workspace.showApiResult({
+				href,
+				label,
+				ok: false,
+				error: e?.message ?? String(e),
+				executedAt: new Date().toISOString()
+			});
+		}
+	}
+
+	// 💾 Скачать: рендер документа по текущей записи и сохранение HTML-файла.
+	async function handleFormDownload(printFormId = '') {
+		if (recordId === 'new') return alert('Сначала сохраните запись');
+		await printerService.downloadRecords(tableId, [recordId], printFormId);
 	}
 
 	// ▶️ Выполнить: код действия таблицы по текущей записи (или декларативный

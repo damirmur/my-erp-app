@@ -13,11 +13,33 @@
 	} = $props();
 
 	let tableMeta = $state<LocalTable | null>(null);
-	let printForms = $state<{ id: string; name: string; is_default: boolean }[]>([]);
+	let printForms = $state<{ id: string; name: string; is_default: boolean; delivery: string }[]>(
+		[]
+	);
 	let showPrintMenu = $state(false);
 	let showMoreMenu = $state(false);
 	let showColumnsMenu = $state(false);
 	let hasPrintForms = $derived(printForms.length > 0);
+
+	// Способы вывода документа. Код в колонке delivery печатной формы
+	// («print,screen,send,download», пусто = все) определяет, какие пункты меню
+	// показываются для конкретной формы.
+	const DELIVERY_MODES: { id: string; icon: string; label: string; action: string }[] = [
+		{ id: 'print', icon: '🖨️', label: 'Печать', action: 'print' },
+		{ id: 'screen', icon: '👁', label: 'На экране', action: 'preview' },
+		{ id: 'send', icon: '✉️', label: 'Отправить', action: 'send' },
+		{ id: 'download', icon: '💾', label: 'Скачать', action: 'download' }
+	];
+
+	function modesFor(form: {
+		delivery: string;
+	}): { id: string; icon: string; label: string; action: string }[] {
+		const codes = form.delivery
+			.split(',')
+			.map((s) => s.trim())
+			.filter(Boolean);
+		return codes.length > 0 ? DELIVERY_MODES.filter((m) => codes.includes(m.id)) : DELIVERY_MODES;
+	}
 
 	// Печатные формы таблицы: записи data_records системной таблицы print_forms,
 	// привязанные к текущей таблице колонкой target_table. Следим через liveQuery.
@@ -35,7 +57,8 @@
 				.map((r) => ({
 					id: r.id,
 					name: String(r.data?.name ?? ''),
-					is_default: r.data?.is_default === true || r.data?.is_default === 1
+					is_default: r.data?.is_default === true || r.data?.is_default === 1,
+					delivery: String(r.data?.delivery ?? '')
 				}));
 		});
 		const sub = observable.subscribe({
@@ -60,22 +83,26 @@
 	let currentStatusDef = $derived(getStatusDef(tableTypeName, status));
 
 	// Закрытие выпадающих меню при клике вне кнопок меню
-	// (клики внутри .toolbar-menu-wrap не закрывают меню — чтобы можно было
-	// переключать несколько чекбоксов видимости подряд)
+	// (клики внутри .toolbar-menu-wrap и .print-dropdown-wrapper не закрывают меню —
+	// чтобы можно было переключать несколько чекбоксов видимости или раскрывать
+	// вложенное меню печатных форм подряд)
 	$effect(() => {
-		if (!showMoreMenu && !showColumnsMenu) return;
+		if (!showMoreMenu && !showColumnsMenu && !showPrintMenu) return;
 		const close = (e: MouseEvent) => {
-			if ((e.target as Element).closest?.('.toolbar-menu-wrap')) return;
+			const target = e.target as Element;
+			if (target.closest?.('.toolbar-menu-wrap') || target.closest?.('.print-dropdown-wrapper'))
+				return;
 			showMoreMenu = false;
 			showColumnsMenu = false;
+			showPrintMenu = false;
 		};
 		document.addEventListener('click', close);
 		return () => document.removeEventListener('click', close);
 	});
 
-	function handlePrintClick(formId: string) {
+	function handleDeliveryClick(action: string, formId: string) {
 		showPrintMenu = false;
-		onAction?.('print', formId);
+		onAction?.(action, formId);
 	}
 </script>
 
@@ -100,32 +127,50 @@
 				</button>
 			{/each}
 			{#if printActionVisible}
-				{#if printForms.length === 1}
-					<button class="btn" onclick={() => handlePrintClick(printForms[0].id)}>
-						🖨️ Печать
+				<div class="print-dropdown-wrapper">
+					<button onclick={() => (showPrintMenu = !showPrintMenu)} class="btn">
+						🖨️ Вывод
+						<span class="print-caret">▾</span>
 					</button>
-				{:else}
-					<div class="print-dropdown-wrapper">
-						<button onclick={() => (showPrintMenu = !showPrintMenu)} class="btn">
-							🖨️ Печать
-							<span class="print-caret">▾</span>
-						</button>
-						{#if showPrintMenu && hasPrintForms}
-							<div class="print-menu">
-								{#each printForms as pf}
-									<button
-										type="button"
-										class="print-menu-item"
-										onclick={() => handlePrintClick(pf.id)}
-									>
-										{pf.name}
-										{pf.is_default ? '✓' : ''}
-									</button>
-								{/each}
-							</div>
-						{/if}
-					</div>
-				{/if}
+					{#if showPrintMenu && hasPrintForms}
+						<div class="print-menu">
+							{#each printForms as pf}
+								{@const modes = modesFor(pf)}
+								<div class="print-menu-form">
+									{#if printForms.length === 1}
+										{#each modes as mode}
+											<button
+												type="button"
+												class="print-menu-item print-menu-mode"
+												onclick={() => handleDeliveryClick(mode.action, pf.id)}
+											>
+												{mode.icon}
+												{mode.label}
+											</button>
+										{/each}
+									{:else}
+										<div class="print-menu-item print-menu-form-label">
+											<span class="print-menu-form-name">
+												{pf.name}
+												{pf.is_default ? '✓' : ''}
+											</span>
+										</div>
+										{#each modes as mode}
+											<button
+												type="button"
+												class="print-menu-item print-menu-mode"
+												onclick={() => handleDeliveryClick(mode.action, pf.id)}
+											>
+												{mode.icon}
+												{mode.label}
+											</button>
+										{/each}
+									{/if}
+								</div>
+							{/each}
+						</div>
+					{/if}
+				</div>
 			{/if}
 			{#if mode === 'list'}
 				<div class="toolbar-menu-wrap">
@@ -326,6 +371,32 @@
 	}
 	.print-menu-item:hover {
 		background-color: #f1f5f9;
+	}
+	.print-menu-form {
+		border-bottom: 1px solid #f1f5f9;
+	}
+	.print-menu-form:last-child {
+		border-bottom: none;
+	}
+	.print-menu-form-label {
+		cursor: default;
+		font-weight: 600;
+		color: #64748b;
+		background: #f8fafc;
+		padding: 5px 12px;
+	}
+	.print-menu-form-label:hover {
+		background: #f8fafc;
+	}
+	.print-menu-form-name {
+		display: block;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.print-menu-mode {
+		padding-left: 20px;
+		font-size: 0.82rem;
 	}
 
 	.toolbar-menu-wrap {

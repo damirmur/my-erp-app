@@ -9,6 +9,7 @@ import {
 	type RunActionContext
 } from '$lib/services/actionRunner';
 import { runFlowElement, type FlowElementInput } from '$lib/services/flowElements';
+import { importStatement } from '$lib/services/bankParser';
 
 // Движок исполнения сценария (тип таблицы 'flow', граф как в n8n).
 //
@@ -169,7 +170,8 @@ async function executeNode(
 			link: linkApi,
 			apiCall,
 			run: runAnotherTable,
-			flow: flowHelper
+			flow: flowHelper,
+			importStatement
 		};
 		return await runActionCode(code, ctx);
 	}

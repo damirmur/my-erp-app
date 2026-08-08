@@ -7,6 +7,7 @@ import { ensureSettingsTable } from '$lib/state/settings';
 import { ensureApiQueryTables } from '$lib/state/apiQueries';
 import { ensureConstantsTable } from '$lib/state/constants';
 import { ensureFlowTables } from '$lib/state/flows';
+import { ensureBankStatementTables } from '$lib/state/bankStatements';
 
 // Имя системной таблицы-истории действий. Уникально в meta_tables, используется
 // для поиска таблицы и в recordHistory/clearHistory/сайдбаре.
@@ -159,6 +160,10 @@ class MetadataManager {
 		// Таблица «Сценарии» (тип flow): граф как в n8n — узлы и связи в ТЧ,
 		// исполнение через движок flowRunner (кнопка «▶️ Выполнить»).
 		await ensureFlowTables();
+
+		// Модуль «Банковские выписки»: каталоги банков и счетов, документ
+		// «Выписки» с ТЧ «Операции» (импорт из PDF — кнопка «▶️ Выполнить»).
+		await ensureBankStatementTables();
 
 		// Таблица настроек приложения (порядок меню основного режима и т.п.).
 		await ensureSettingsTable();

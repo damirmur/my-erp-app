@@ -3,12 +3,15 @@ import { supabase } from '$lib/db/supabase';
 import { buildRecordUrl, linkApi } from '$lib/services/deeplink';
 import { workspace } from '$lib/state/workspace.svelte';
 import { flowHelper, type FlowStep } from '$lib/services/flowRunner';
+import { importStatement } from '$lib/services/bankParser';
 import { autoFillDocumentFields } from '$lib/services/numbers';
 
 // Контекст, передаваемый в пользовательский код действия «Выполнить».
 // Доступно из кода: record, records, lines, params, db, supabase, save(), log(),
-// link, apiCall(), run(), flow(). В узлах сценария дополнительно:
-// input (результат предыдущего узла), inputs (все входы по ролям).
+// link, apiCall(), run(), flow(), importStatement(). В узлах сценария
+// дополнительно: input (результат предыдущего узла), inputs (все входы по ролям).
+// В коде-парсере банка (importStatement) дополнительно: text (текст PDF),
+// rows (строки таблицы), helpers (утилиты num/amount/date/hint).
 export interface RunActionContext {
 	record: LocalRecord | null; // Текущая запись (в форме — открытая; в списке — первая выбранная)
 	records: LocalRecord[]; // Выбранные записи (в форме — [record])
@@ -24,6 +27,10 @@ export interface RunActionContext {
 	input?: unknown; // В узлах сценария: результат предшествующего узла (роль flow/input)
 	inputs?: Record<string, unknown>; // В узлах сценария: все входы по ролям связей
 	flow?: (recordId: string, params?: Record<string, any>) => Promise<unknown>; // Выполнить сценарий
+	importStatement?: typeof importStatement; // Импорт банковской выписки из PDF
+	text?: string; // В коде-парсера банка: весь текст PDF
+	rows?: unknown[]; // В коде-парсера банка: строки таблицы из координат
+	helpers?: Record<string, any>; // В коде-парсера банка: утилиты num/amount/date/hint
 }
 
 // Выполнение JS-кода действия в браузере. Код — тело async-функции.
@@ -45,7 +52,11 @@ export async function runActionCode(code: string, ctx: RunActionContext): Promis
 		'run',
 		'flow',
 		'input',
-		'inputs'
+		'inputs',
+		'importStatement',
+		'text',
+		'rows',
+		'helpers'
 	];
 	const values = paramNames.map((k) => (ctx as unknown as Record<string, unknown>)[k]);
 	const fn = new Function(...paramNames, `return (async () => {\n${code}\n})();`);
@@ -97,7 +108,8 @@ export async function runAnotherTable(tableName: string, recordId: string): Prom
 		link: linkApi,
 		apiCall,
 		run: runAnotherTable,
-		flow: flowHelper
+		flow: flowHelper,
+		importStatement
 	});
 }
 
@@ -185,7 +197,8 @@ export async function runRecordAction(
 			link: linkApi,
 			apiCall,
 			run: runAnotherTable,
-			flow: flowHelper
+			flow: flowHelper,
+			importStatement
 		});
 		return { ok: true, value, steps: extractSteps(value), isFlow };
 	} catch (e: any) {

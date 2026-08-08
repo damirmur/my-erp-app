@@ -4,6 +4,7 @@ import { metadata } from '$lib/state/metadata';
 import { seedNotificationDefaults } from '$lib/state/notifications';
 import { seedApiQueryDefaults } from '$lib/state/apiQueries';
 import { seedFlowExample } from '$lib/state/flows';
+import { seedBankStatementDefaults } from '$lib/state/bankStatements';
 
 // Ключ в localStorage: максимальная серверная updated_at из последнего pull.
 // Не зависит от локальных записей, поэтому сиды/история не могут сдвинуть
@@ -268,6 +269,7 @@ export const syncService = {
 			await seedNotificationDefaults();
 			await seedApiQueryDefaults();
 			await seedFlowExample();
+			await seedBankStatementDefaults();
 			console.log('Синхронизация завершена.');
 		} finally {
 			running = false;

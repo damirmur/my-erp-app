@@ -10,4 +10,10 @@ declare global {
 	}
 }
 
+// Vite `?url` imports (например, воркер pdfjs-dist)
+declare module '*?url' {
+	const src: string;
+	export default src;
+}
+
 export {};

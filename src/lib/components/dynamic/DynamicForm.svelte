@@ -12,6 +12,7 @@
 	import { autoFillDocumentFields, todayIso } from '$lib/services/numbers';
 	import { physicalDeleteRecords } from '$lib/services/records';
 	import { runRecordAction } from '$lib/services/actionRunner';
+	import { fireTriggers } from '$lib/services/triggers';
 	import { isReadOnly, getEffectiveConfig } from '$lib/table-types';
 	import { fieldRegistry } from '$lib/fields';
 	import GroupField from '$lib/fields/GroupField.svelte';
@@ -398,6 +399,12 @@
 		const autoData = await autoFillDocumentFields(tableId, cleanData);
 		recordData = { ...recordData, ...autoData };
 
+		// Статус ДО сохранения — для перехода триггера (проведение/отмена/удаление
+		// определяются по нему; recordStatus уже равен целевому статусу, т.к.
+		// handleAction выставляет его перед вызовом saveToDb).
+		const prevRecord = await db.data_records.get(recordId);
+		const prevStatus = prevRecord?.status ?? null;
+
 		try {
 			// Иерархия хранится в top-level parent_id записи (поле «Группа» в шапке
 			// формы). В data.parent_id НЕ пишем — колонка-ссылка больше не используется.
@@ -446,6 +453,18 @@
 			'save',
 			targetStatus
 		);
+
+		// Сценарии-триггеры: запускаются синхронно после сохранения. Успешный
+		// прогон мог записать/дополнить ТЧ — перечитываем форму, чтобы изменения
+		// были видны сразу. Ошибка — во всплывающем окне (в историю уже записана).
+		const triggerRun = await fireTriggers(tableId, recordId, prevStatus, targetStatus);
+		if (triggerRun.ran) {
+			await loadForm();
+			workspace.setDirty(tabId, false);
+		}
+		if (!triggerRun.ok) {
+			alert(`Сценарий-триггер не выполнен: ${triggerRun.error}`);
+		}
 	}
 
 	async function handleAction(actionId: string, printFormId = '') {
@@ -640,6 +659,11 @@
 				}
 			}
 		});
+
+		// Копия создаёт новую запись — сценарии-триггеры «При сохранении»
+		// срабатывают и для неё (например, повторный импорт по скопированному файлу).
+		const triggerRun = await fireTriggers(tableId, newRecordId, null, 'draft');
+		if (!triggerRun.ok) alert(`Сценарий-триггер не выполнен: ${triggerRun.error}`);
 
 		workspace.openForm(tableId, newRecordId, tableTitle, nextFreeNumber);
 	}

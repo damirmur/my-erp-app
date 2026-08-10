@@ -2,6 +2,7 @@ import { supabase } from '$lib/db/supabase';
 import { db } from '$lib/db/indexeddb';
 import { buildRecordUrl } from '$lib/services/deeplink';
 import { workspace } from '$lib/state/workspace.svelte';
+import { fireTriggers } from '$lib/services/triggers';
 
 // Физическое удаление записей: на сервере (строки ТЧ + шапки) и в локальном кэше.
 // Безвозвратно — вызывать только после подтверждения пользователя.
@@ -23,6 +24,7 @@ export async function physicalDeleteRecords(recordIds: string[]): Promise<void> 
 	});
 
 	// Журнал изменений: факт безвозвратного удаления (ссылка на объект уже мертва)
+	// и сценарии-триггеры «При удалении» (запись уже стёрта — передаём снимок).
 	for (const rec of before) {
 		if (!rec) continue;
 		try {
@@ -33,6 +35,13 @@ export async function physicalDeleteRecords(recordIds: string[]): Promise<void> 
 			await workspace.recordHistory(rec.table_id, title, buildRecordUrl(rec.id), 'delete');
 		} catch {
 			// история — некритично
+		}
+		try {
+			await fireTriggers(rec.table_id, rec.id, rec.status, 'marked_for_deletion', {
+				recordSnapshot: rec.data
+			});
+		} catch (e) {
+			console.warn('Сценарий-триггер «При удалении»:', e);
 		}
 	}
 }

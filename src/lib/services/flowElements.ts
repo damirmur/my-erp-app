@@ -86,6 +86,14 @@ export function selectOptionsFor(
 	) {
 		return allElementDefs().map((e) => ({ value: e.type, label: e.label }));
 	}
+	if (tableName === 'flow_scenarios' && columnName === 'trigger_event') {
+		return [
+			{ value: 'save', label: 'При сохранении' },
+			{ value: 'post', label: 'При проведении' },
+			{ value: 'unpost', label: 'При отмене проведения' },
+			{ value: 'delete', label: 'При удалении' }
+		];
+	}
 	return [];
 }
 

@@ -16,6 +16,11 @@ import { ensureColumns, ensureTable } from '$lib/state/seed';
 //            (тип + сервис + параметры/код). Узел ссылается на элемент и может
 //            переопределять его параметры/код/тип — движок сливает их.
 //
+// Сценарий может быть триггером: колонки «Срабатывает для таблицы»
+// (trigger_table) и «Событие» (trigger_event: save/post/unpost/delete) — сценарий
+// запускается автоматически при соответствующем событии любой записи этой
+// таблицы (движок — services/triggers.ts). Привязка целиком в данных.
+//
 // Исполнение — кнопка «▶️ Выполнить»: движок flowRunner.ts запускается либо
 // через config.runCode (дефолт), либо напрямую по типу таблицы (runRecordAction).
 // Таблицы создаются идемпотентно (код-сид) при старте и в начале каждого синка.
@@ -49,6 +54,20 @@ function scenarioColumns(): Omit<LocalColumn, 'id' | 'table_id'>[] {
 			title: 'Параметры',
 			type: 'paramslist',
 			sort_order: 40,
+			is_visible: true
+		},
+		{
+			name: 'trigger_table',
+			title: 'Срабатывает для таблицы',
+			type: 'link',
+			sort_order: 50,
+			is_visible: true
+		},
+		{
+			name: 'trigger_event',
+			title: 'Событие',
+			type: 'select',
+			sort_order: 60,
 			is_visible: true
 		}
 	];

@@ -8,6 +8,7 @@
 	import { formatFieldValue } from '$lib/fields';
 	import { physicalDeleteRecords } from '$lib/services/records';
 	import { runRecordAction, mergeParams } from '$lib/services/actionRunner';
+	import { fireTriggers } from '$lib/services/triggers';
 	import { metadata } from '$lib/state/metadata';
 	import {
 		buildExecuteUrl,
@@ -422,6 +423,7 @@
 	async function handleMassPost() {
 		if (selectedIds.length === 0) return alert('Выберите строки');
 		let skippedCount = 0;
+		const prev: Record<string, string | null> = {};
 		await db.transaction('rw', [db.data_records], async () => {
 			for (const id of selectedIds) {
 				const rec = await db.data_records.get(id);
@@ -429,32 +431,54 @@
 					skippedCount++;
 					continue;
 				}
-				if (rec) await db.data_records.update(id, { status: 'posted', is_dirty: 1 });
+				if (rec) {
+					prev[id] = rec.status;
+					await db.data_records.update(id, { status: 'posted', is_dirty: 1 });
+				}
 			}
 		});
+		await fireRowTriggers('posted', prev);
 		if (skippedCount > 0) alert(`Успешно. Пропущено папок или удаленных: ${skippedCount}`);
 		selectedIds = [];
 	}
 
 	async function handleMassDelete() {
 		if (selectedIds.length === 0) return alert('Выберите строки');
+		const prev: Record<string, string | null> = {};
 		await db.transaction('rw', [db.data_records], async () => {
-			for (const id of selectedIds)
+			for (const id of selectedIds) {
+				const rec = await db.data_records.get(id);
+				prev[id] = rec?.status ?? null;
 				await db.data_records.update(id, { status: 'marked_for_deletion', is_dirty: 1 });
+			}
 		});
+		await fireRowTriggers('marked_for_deletion', prev);
 		selectedIds = [];
 	}
 
 	async function handleMassRestore() {
 		if (selectedIds.length === 0) return alert('Выберите строки');
+		const prev: Record<string, string | null> = {};
 		await db.transaction('rw', [db.data_records], async () => {
 			for (const id of selectedIds) {
 				const rec = await db.data_records.get(id);
-				if (rec && rec.status === 'marked_for_deletion')
+				if (rec && rec.status === 'marked_for_deletion') {
+					prev[id] = rec.status;
 					await db.data_records.update(id, { status: 'draft', is_dirty: 1 });
+				}
 			}
 		});
+		await fireRowTriggers('draft', prev);
 		selectedIds = [];
+	}
+
+	// Сценарии-триггеры после массовой смены статуса (id → предыдущий статус).
+	// Ошибка — во всплывающем окне (в историю уже записана).
+	async function fireRowTriggers(nextStatus: string, prevByRecord: Record<string, string | null>) {
+		for (const [id, prev] of Object.entries(prevByRecord)) {
+			const run = await fireTriggers(tableId, id, prev, nextStatus);
+			if (!run.ok) alert(`Сценарий-триггер не выполнен: ${run.error}`);
+		}
 	}
 
 	// Безвозвратное удаление записей, помеченных на удаление (как «Удаление помеченных объектов» в 1С)
@@ -650,18 +674,27 @@
 	}
 
 	async function postRecord(id: string) {
+		const prev = (await db.data_records.get(id))?.status ?? null;
 		await db.data_records.update(id, { status: 'posted', is_dirty: 1 });
 		selectedIds = selectedIds.filter((i) => i !== id);
+		const run = await fireTriggers(tableId, id, prev, 'posted');
+		if (!run.ok) alert(`Сценарий-триггер не выполнен: ${run.error}`);
 	}
 
 	async function markForDeletion(id: string) {
+		const prev = (await db.data_records.get(id))?.status ?? null;
 		await db.data_records.update(id, { status: 'marked_for_deletion', is_dirty: 1 });
 		selectedIds = selectedIds.filter((i) => i !== id);
+		const run = await fireTriggers(tableId, id, prev, 'marked_for_deletion');
+		if (!run.ok) alert(`Сценарий-триггер не выполнен: ${run.error}`);
 	}
 
 	async function restoreRecord(id: string) {
+		const prev = (await db.data_records.get(id))?.status ?? null;
 		await db.data_records.update(id, { status: 'draft', is_dirty: 1 });
 		selectedIds = selectedIds.filter((i) => i !== id);
+		const run = await fireTriggers(tableId, id, prev, 'draft');
+		if (!run.ok) alert(`Сценарий-триггер не выполнен: ${run.error}`);
 	}
 
 	async function deleteRecord(id: string) {

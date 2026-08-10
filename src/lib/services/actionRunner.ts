@@ -6,6 +6,7 @@ import { flowHelper, type FlowStep } from '$lib/services/flowRunner';
 import { flowLayout } from '$lib/services/flowLayout';
 import { autoFillDocumentFields } from '$lib/services/numbers';
 import { sandboxContext } from '$lib/services/sandbox';
+import { fireTriggers, isTriggerActive } from '$lib/services/triggers';
 
 // Контекст, передаваемый в пользовательский код действия «Выполнить».
 // Доступно из кода: record, records, lines, params, db, supabase, save(), log(),
@@ -336,6 +337,9 @@ export async function saveRecordWithLines(record: LocalRecord, lines?: LocalLine
 	const autoData = await autoFillDocumentFields(record.table_id, record.data ?? {});
 	record = { ...record, data: autoData };
 
+	// Статус до сохранения — для перехода сценария-триггера (для новых записей null).
+	const prevStatus = (await db.data_records.get(record.id))?.status ?? null;
+
 	await db.transaction('rw', [db.data_records, db.data_lines], async () => {
 		await db.data_records.put({
 			...record,
@@ -353,7 +357,15 @@ export async function saveRecordWithLines(record: LocalRecord, lines?: LocalLine
 		}
 	});
 
-	// Журнал изменений: факт сохранения из кода действия (save())
+	// Сценарии-триггеры таблицы по переходу статусов (кроме сохранений, сделанных
+	// внутри самого сценария-триггера — защита от зацикливания в fireTriggers).
+	if (!isTriggerActive()) {
+		await fireTriggers(record.table_id, record.id, prevStatus, String(record.status ?? 'draft'));
+	}
+
+	// Журнал изменений: факт сохранения из кода действия (save()). Внутри
+	// сценария-триггера не дублируем — прогон уже записан как «выполнение сценария».
+	if (isTriggerActive()) return;
 	try {
 		const table = await db.meta_tables.get(record.table_id);
 		if (table && table.type !== 'system') {

@@ -9,7 +9,12 @@
 	import { physicalDeleteRecords } from '$lib/services/records';
 	import { runRecordAction, mergeParams } from '$lib/services/actionRunner';
 	import { metadata } from '$lib/state/metadata';
-	import { buildExecuteUrl, buildRecordUrl, fullUrlFor } from '$lib/services/deeplink';
+	import {
+		buildExecuteUrl,
+		buildListUrl,
+		buildRecordUrl,
+		fullUrlFor
+	} from '$lib/services/deeplink';
 	import { liveQuery } from 'dexie';
 	import Toolbar from './Toolbar.svelte';
 	import './erpTable.css';
@@ -31,6 +36,10 @@
 	// Режим показа иерархического списка: 'groups' — по группам (как сейчас),
 	// 'all' — развёрнутый список всех записей справочника.
 	let viewMode = $state<'groups' | 'all'>('groups');
+
+	// Поиск по списку: при непустом запросе ищем по всему каталогу (вне
+	// зависимости от текущей группы) по всем видимым колонкам.
+	let searchQuery = $state('');
 
 	let sortField = $state<string>('number');
 	let sortDirection = $state<'asc' | 'desc'>('asc');
@@ -138,17 +147,42 @@
 	// показываем в корне, чтобы они никогда не пропадали из списка.
 	let folderIds = $derived(new Set(records.filter((r) => r.is_folder).map((r) => r.id)));
 
-	let filteredAndSortedRecords = $derived.by(() => {
-		const currentLevelRecords = records.filter((r) => {
-			if (!isHierarchical || viewMode === 'all') return true;
-			// Иерархия хранится в top-level parent_id записи (единственный источник).
-			if (currentFolderId === null) {
-				return r.parent_id == null || !folderIds.has(String(r.parent_id));
+	// Совпадение записи с поисковым запросом: ищем подстроку в значениях всех
+	// видимых колонок (для link/linelink — по наименованию связанной записи).
+	function matchesSearch(record: LocalRecord, q: string): boolean {
+		for (const col of columns) {
+			const raw = record.data?.[col.name];
+			let text: string;
+			if ((col.type === 'link' || col.type === 'linelink') && raw) {
+				text = linkDisplay[`${col.id}:${raw}`] ?? String(raw);
+			} else if (col.type === 'universal' && raw?.t === 'link' && raw.v) {
+				text = linkDisplay[`${col.id}:${raw.v}`] ?? String(raw.v);
+			} else {
+				text = formatCell(col, record);
 			}
-			return String(r.parent_id) === currentFolderId;
-		});
+			if (text.toLowerCase().includes(q)) return true;
+		}
+		return false;
+	}
 
-		return currentLevelRecords.sort((a, b) => {
+	let filteredAndSortedRecords = $derived.by(() => {
+		const q = searchQuery.trim().toLowerCase();
+		let list: LocalRecord[];
+		if (q) {
+			// Поиск идёт по всему каталогу, игнорируя текущую группу.
+			list = records.filter((r) => matchesSearch(r, q));
+		} else {
+			list = records.filter((r) => {
+				if (!isHierarchical || viewMode === 'all') return true;
+				// Иерархия хранится в top-level parent_id записи (единственный источник).
+				if (currentFolderId === null) {
+					return r.parent_id == null || !folderIds.has(String(r.parent_id));
+				}
+				return String(r.parent_id) === currentFolderId;
+			});
+		}
+
+		return list.sort((a, b) => {
 			if (isHierarchical) {
 				if (a.is_folder && !b.is_folder) return -1;
 				if (!a.is_folder && b.is_folder) return 1;
@@ -205,7 +239,7 @@
 		const ids = new Set<string>();
 		const lineIds = new Set<string>();
 		for (const col of linkCols) {
-			for (const r of filteredAndSortedRecords) {
+			for (const r of records) {
 				const v = r.data?.[col.name];
 				if (col.type === 'linelink') {
 					if (v && typeof v === 'string') lineIds.add(v);
@@ -222,7 +256,7 @@
 				const map: Record<string, string> = {};
 				for (const col of linkCols) {
 					if (col.type === 'linelink') continue;
-					for (const r of filteredAndSortedRecords) {
+					for (const r of records) {
 						const v = r.data?.[col.name];
 						const id = col.type === 'link' ? v : v?.t === 'link' ? v?.v : null;
 						if (!id) continue;
@@ -240,7 +274,7 @@
 					const map: Record<string, string> = {};
 					for (const col of linkCols) {
 						if (col.type !== 'linelink') continue;
-						for (const r of filteredAndSortedRecords) {
+						for (const r of records) {
 							const id = r.data?.[col.name];
 							if (!id || typeof id !== 'string') continue;
 							map[`${col.id}:${id}`] = lineTitle(lines.find((l) => l?.id === id));
@@ -589,6 +623,16 @@
 		}
 	}
 
+	async function copyTableLink() {
+		const url = fullUrlFor(buildListUrl(tableId));
+		try {
+			await navigator.clipboard.writeText(url);
+			alert('Ссылка на таблицу скопирована: ' + url);
+		} catch {
+			alert('Не удалось скопировать ссылку: ' + url);
+		}
+	}
+
 	function openRecord(record: LocalRecord) {
 		if (record.is_folder && isHierarchical) {
 			// В развёрнутом списке клик по папке переключает в режим «По группам» и открывает её
@@ -650,7 +694,25 @@
 		onToggleColumn={async (colId: string, visible: boolean) => {
 			await metadata.setColumnVisibility(colId, visible);
 		}}
+		onCopyTableLink={copyTableLink}
 	/>
+
+	<div class="list-search-bar">
+		<span class="list-search-icon">🔍</span>
+		<input
+			type="text"
+			bind:value={searchQuery}
+			placeholder="Поиск по списку..."
+			class="list-search-input"
+			title="Поиск по всем колонкам (при непустом запросе — по всему каталогу)"
+		/>
+		{#if searchQuery}
+			<button class="list-search-clear" onclick={() => (searchQuery = '')} title="Сбросить поиск"
+				>✕</button
+			>
+			<span class="list-search-count">найдено: {filteredAndSortedRecords.length}</span>
+		{/if}
+	</div>
 
 	{#if isHierarchical}
 		<div class="hierarchy-breadcrumbs">
@@ -724,7 +786,8 @@
 				<tbody>
 					{#if filteredAndSortedRecords.length === 0}
 						<tr
-							><td colSpan={columns.length + 3} class="empty-row">В этой папке нет элементов.</td
+							><td colSpan={columns.length + 3} class="empty-row"
+								>{searchQuery ? 'Ничего не найдено по запросу.' : 'В этой папке нет элементов.'}</td
 							></tr
 						>
 					{:else}
@@ -905,6 +968,47 @@
 		display: flex;
 		flex-direction: column;
 		height: 100%;
+	}
+	.list-search-bar {
+		background: #ffffff;
+		border-bottom: 1px solid #cbd5e1;
+		padding: 6px 12px;
+		display: flex;
+		align-items: center;
+		gap: 8px;
+	}
+	.list-search-icon {
+		font-size: 0.8rem;
+	}
+	.list-search-input {
+		flex: 1;
+		max-width: 320px;
+		padding: 4px 8px;
+		border: 1px solid #cbd5e1;
+		border-radius: 4px;
+		font-size: 0.85rem;
+		outline: none;
+	}
+	.list-search-input:focus {
+		border-color: #3b82f6;
+	}
+	.list-search-clear {
+		background: none;
+		border: none;
+		color: #94a3b8;
+		font-size: 0.8rem;
+		cursor: pointer;
+		padding: 2px 6px;
+		border-radius: 4px;
+	}
+	.list-search-clear:hover {
+		background: #f1f5f9;
+		color: #334155;
+	}
+	.list-search-count {
+		font-size: 0.8rem;
+		color: #64748b;
+		white-space: nowrap;
 	}
 	.hierarchy-breadcrumbs {
 		background: #f8fafc;

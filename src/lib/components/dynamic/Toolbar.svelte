@@ -9,7 +9,8 @@
 		tableId = '',
 		onAction = null,
 		columns = [] as LocalColumn[],
-		onToggleColumn = null
+		onToggleColumn = null,
+		onCopyTableLink = null
 	} = $props();
 
 	let tableMeta = $state<LocalTable | null>(null);
@@ -171,6 +172,18 @@
 						</div>
 					{/if}
 				</div>
+			{/if}
+			{#if mode === 'list' && onCopyTableLink}
+				<button
+					class="btn btn-icon-only"
+					title="Копировать ссылку на таблицу"
+					onclick={(e) => {
+						e.stopPropagation();
+						onCopyTableLink();
+					}}
+				>
+					🔗
+				</button>
 			{/if}
 			{#if mode === 'list'}
 				<div class="toolbar-menu-wrap">

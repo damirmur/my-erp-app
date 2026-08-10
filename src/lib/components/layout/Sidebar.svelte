@@ -6,6 +6,7 @@
 	import { liveQuery } from 'dexie';
 	import { tableTypeList, deleteTableTypeFromDB, createTableTypeFromBase } from '$lib/table-types';
 	import { translit } from '$lib/services/nameAuto';
+	import { buildListUrl, fullUrlFor } from '$lib/services/deeplink';
 	import {
 		APP_SETTINGS_TABLE,
 		NAV_ORDER_KEY,
@@ -125,6 +126,17 @@
 		openLinkExpanded = false;
 		openLinkInput = '';
 		openLinkError = '';
+	}
+
+	// Копирование ссылки на таблицу (#/t/{id}) в буфер обмена
+	async function copyTableLink(table: LocalTable) {
+		const url = fullUrlFor(buildListUrl(table.id));
+		try {
+			await navigator.clipboard.writeText(url);
+			alert('Ссылка на таблицу скопирована: ' + url);
+		} catch {
+			alert('Не удалось скопировать ссылку: ' + url);
+		}
 	}
 
 	// Те же группы, но без скрытых таблиц (для основного режима)
@@ -904,14 +916,21 @@
 									{:else}
 										{#each orderedTablesFor(typeDef.type) as table}
 											<li>
-												<button
-													onclick={() => workspace.openList(table.id, table.title)}
-													class="nav-item"
-													class:active={workspace.activeTab?.tableId === table.id &&
-														workspace.activeTab?.type === 'list'}
-												>
-													{table.title}
-												</button>
+												<div class="nav-item-row">
+													<button
+														onclick={() => workspace.openList(table.id, table.title)}
+														class="nav-item"
+														class:active={workspace.activeTab?.tableId === table.id &&
+															workspace.activeTab?.type === 'list'}
+													>
+														{table.title}
+													</button>
+													<button
+														class="row-link-btn"
+														onclick={() => copyTableLink(table)}
+														title="Копировать ссылку на таблицу">🔗</button
+													>
+												</div>
 											</li>
 										{/each}
 									{/if}
@@ -1273,6 +1292,37 @@
 	}
 	.row-del-btn:hover {
 		background-color: #fee2e2;
+	}
+	.nav-item-row {
+		display: flex;
+		align-items: center;
+		gap: 2px;
+	}
+	.nav-item-row .nav-item {
+		flex: 1;
+		min-width: 0;
+	}
+	.row-link-btn {
+		background: none;
+		border: none;
+		color: #2563eb;
+		font-size: 0.75rem;
+		padding: 2px 6px;
+		border-radius: 0.25rem;
+		cursor: pointer;
+		flex-shrink: 0;
+		visibility: hidden;
+		opacity: 0;
+		transition:
+			opacity 0.15s,
+			background-color 0.15s;
+	}
+	.nav-item-row:hover .row-link-btn {
+		visibility: visible;
+		opacity: 1;
+	}
+	.row-link-btn:hover {
+		background: #dbeafe;
 	}
 	.nav-item-sub {
 		font-size: 0.85rem;

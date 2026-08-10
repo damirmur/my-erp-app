@@ -1,5 +1,5 @@
 import type { LocalColumn } from '$lib/db/indexeddb';
-import { ensureColumns, ensureTable } from '$lib/state/notifications';
+import { ensureColumns, ensureTable } from '$lib/state/seed';
 
 // Модуль «Банковские выписки»: импорт выписок из PDF. Таблицы создаются
 // идемпотентно (код-сид) при старте приложения и в начале каждого цикла

@@ -7,6 +7,7 @@
 	import { syncTableTypes } from '$lib/table-types';
 	import { workspace } from '$lib/state/workspace.svelte';
 	import { metadata } from '$lib/state/metadata';
+	import { registerSandboxPlugins } from '$lib/services/sandboxPlugins';
 
 	// При первом запуске и при смене hash (кнопки назад/вперёд, ручной ввод ссылки)
 	// открываем объект по уникальной ссылке #/t/..., #/r/..., #/l/...
@@ -17,6 +18,9 @@
 
 	$effect(() => {
 		syncTableTypes();
+
+		// Хелперы модулей в песочнице (parsePdf, importStatement — лениво).
+		registerSandboxPlugins();
 
 		// Системные таблицы (например, «История») создаём до первой синхронизации,
 		// чтобы и офлайн, и после pullMetadata они существовали в локальном кэше

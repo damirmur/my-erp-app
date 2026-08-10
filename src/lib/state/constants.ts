@@ -1,5 +1,5 @@
 import { db, type LocalColumn } from '$lib/db/indexeddb';
-import { ensureColumns, ensureTable } from '$lib/state/notifications';
+import { ensureColumns, ensureTable } from '$lib/state/seed';
 
 // Модуль «Константы»: одна таблица на все константы (type='constant',
 // config.manyRecords=true — обычный список, запись = константа). Поле

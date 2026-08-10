@@ -1,6 +1,6 @@
 import { supabase } from '$lib/db/supabase';
 import { db, type LocalColumn, type LocalRecord } from '$lib/db/indexeddb';
-import { ensureColumns, ensureTable, hasServerRows, seedRecord } from '$lib/state/notifications';
+import { ensureColumns, ensureTable, hasServerRows, seedRecord } from '$lib/state/seed';
 
 // Модуль «Печатные формы»: реестр печатных форм (шаблонов HTML) для любых
 // таблиц приложения. Каждая запись = одна печатная форма: привязка к целевой

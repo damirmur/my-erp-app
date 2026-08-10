@@ -1,6 +1,6 @@
 import { supabase } from '$lib/db/supabase';
 import { db, type LocalRecord } from '$lib/db/indexeddb';
-import { ensureTable } from '$lib/state/notifications';
+import { ensureTable } from '$lib/state/seed';
 
 // Модуль настроек приложения: системная таблица app_settings (hiddenInMain).
 // Каждая настройка — обычная запись data_records с ключом в data.key (например,
@@ -60,8 +60,8 @@ async function serverSettingRecord(tableId: string, key: string): Promise<{ id: 
 
 // Идемпотентное создание таблицы настроек (Supabase + локальный кэш).
 // Вызывается из metadata.ensureSystemTables() — при старте и перед каждым синком.
-export async function ensureSettingsTable(): Promise<string> {
-	return ensureTable(APP_SETTINGS_TABLE, 'Настройки', 'system', { hiddenInMain: true });
+export async function ensureSettingsTable(): Promise<void> {
+	await ensureTable(APP_SETTINGS_TABLE, 'Настройки', 'system', { hiddenInMain: true });
 }
 
 // Сохранение настройки: локально (is_dirty=1, уедет обычным синком) и на сервер,

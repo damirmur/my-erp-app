@@ -1,12 +1,7 @@
 import { supabase } from '$lib/db/supabase';
 import { db, type LocalColumn } from '$lib/db/indexeddb';
-import {
-	API_SERVICES_TABLE,
-	NOTIFY_CHANNELS_TABLE,
-	ensureColumns,
-	ensureTable,
-	findTableIdByName
-} from '$lib/state/notifications';
+import { API_SERVICES_TABLE, NOTIFY_CHANNELS_TABLE } from '$lib/state/notifications';
+import { ensureColumns, ensureTable, findTableIdByName } from '$lib/state/seed';
 
 // Модуль расписаний: документ «Расписание» для периодической рассылки
 // (например, погоды). Таблицы создаются идемпотентно (код-сид) при старте

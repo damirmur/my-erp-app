@@ -1,14 +1,7 @@
 import { supabase } from '$lib/db/supabase';
 import { db, type LocalColumn } from '$lib/db/indexeddb';
 import { getTableType } from '$lib/table-types';
-import { ensureNotificationTables } from '$lib/state/notifications';
-import { ensureSchedulerTables } from '$lib/state/scheduler';
-import { ensureSettingsTable } from '$lib/state/settings';
-import { ensureApiQueryTables } from '$lib/state/apiQueries';
-import { ensureConstantsTable } from '$lib/state/constants';
-import { ensureFlowTables } from '$lib/state/flows';
-import { ensureBankStatementTables } from '$lib/state/bankStatements';
-import { ensurePrintFormsTable } from '$lib/state/printForms';
+import { CORE_MODULES, DEFAULT_MODULES, ensureModule } from '$lib/state/modules';
 
 // Имя системной таблицы-истории действий. Уникально в meta_tables, используется
 // для поиска таблицы и в recordHistory/clearHistory/сайдбаре.
@@ -47,12 +40,25 @@ function slugify(text: string): string {
 }
 
 class MetadataManager {
+	// Уже обеспечили системные таблицы в этой сессии, будучи онлайн? Тогда
+	// серверные id каноничны, и повторные вызовы (в начале каждого синка) можно
+	// пропускать — это убирает ~60-90 запросов из каждого цикла. Если первый
+	// прогон был офлайн — флаг не ставим: следующий онлайн-синк обязан сверить
+	// локальные (случайные) id с серверными.
+	private systemEnsuredOnline = false;
+
 	// Гарантировать наличие системных таблиц (сейчас — только «История»).
 	// Идемпотентно: ищет таблицу по name, создаёт в Supabase (если онлайн) и
 	// всегда синхронизирует в локальный кэш IndexedDB (для офлайн-режима).
 	// Вызывается при старте приложения и в начале каждого цикла синхронизации.
 	async ensureSystemTables(): Promise<void> {
 		const online = typeof navigator !== 'undefined' && navigator.onLine;
+		if (this.systemEnsuredOnline && online) return;
+		if (!online) {
+			// Офлайн-прогон: создаём локальные таблицы, но канонические id не
+			// гарантируем — следующий онлайн-прогон должен сверить их с сервером.
+			this.systemEnsuredOnline = false;
+		}
 
 		// 1. Найти или создать таблицу в Supabase. Ищем по name; если на сервере
 		// завелись дубликаты (старые версии) — берём первый, остальные подчистит
@@ -142,36 +148,15 @@ class MetadataManager {
 
 		await this.ensureHistoryColumns(effectiveId, online);
 
-		// Справочники и документ модуля уведомлений (провайдеры, каналы, получатели, сообщения).
-		// Идемпотентно создаются так же, как «История»: при старте и перед каждым синком.
-		await ensureNotificationTables();
+		// Модули ядра и по умолчанию: настройки (app_settings), печатные формы,
+		// сценарии (flow), уведомления/сообщения. Опциональные модули (банк,
+		// API-запросы, константы, расписания) boot НЕ создаёт — они включаются
+		// вручную (installModule) или живут как сценарии-данные.
+		for (const mod of [...CORE_MODULES, ...DEFAULT_MODULES]) {
+			await ensureModule(mod);
+		}
 
-		// Документ «Расписание» для периодической рассылки (например, погоды).
-		// Исполняет Go-сервер 24/7; здесь создаются только метаданные таблиц.
-		await ensureSchedulerTables();
-
-		// Каталог «API-запросы»: внешние запросы (сервис + параметры-дефолты),
-		// вызываемые по deep-link #/r/{id}.execute({...}).json или кнопкой ▶️.
-		await ensureApiQueryTables();
-
-		// Таблица «Константы»: одна таблица на все константы (много записей,
-		// универсальное поле «Значение», периодичность через ТЧ «Периоды»).
-		await ensureConstantsTable();
-
-		// Таблица «Сценарии» (тип flow): граф как в n8n — узлы и связи в ТЧ,
-		// исполнение через движок flowRunner (кнопка «▶️ Выполнить»).
-		await ensureFlowTables();
-
-		// Модуль «Банковские выписки»: каталоги банков и счетов, документ
-		// «Выписки» с ТЧ «Операции» (импорт из PDF — кнопка «▶️ Выполнить»).
-		await ensureBankStatementTables();
-
-		// Таблица «Печатные формы»: реестр HTML-шаблонов для печати записей
-		// любых таблиц (справочников, документов, сценариев и т.д.).
-		await ensurePrintFormsTable();
-
-		// Таблица настроек приложения (порядок меню основного режима и т.п.).
-		await ensureSettingsTable();
+		if (online) this.systemEnsuredOnline = true;
 	}
 
 	// Колонки истории: проверяет и создаёт недостающие на сервере (если онлайн)

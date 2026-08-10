@@ -10,6 +10,9 @@ import type { ApiCallResult } from '$lib/services/actionRunner';
 // Подстановки ${путь}: в параметрах узла можно ссылаться на результат
 // предыдущего узла (${input} — целиком, ${city} — ключ входного объекта,
 // ${current.temp_c} — вложенный путь) и на входные параметры сценария.
+//
+// Модули могут добавлять собственные типы элементов через registerFlowElement —
+// движок не знает про них, но диспетчер/списки их учитывают.
 
 export interface FlowElementDef {
 	type: string;
@@ -45,12 +48,30 @@ export const FLOW_ELEMENTS: FlowElementDef[] = [
 	{ type: 'code', label: 'Код', icon: '🧩', hint: 'Произвольный JS (колонка «Код узла»)' }
 ];
 
+// Реестр внешних элементов (модули: банк, импорт и т.д.). Движок их не знает,
+// но диспетчер runFlowElement и списки выбора учитывают.
+export type FlowElementHandler = (e: FlowElementInput) => Promise<unknown>;
+
+const externalElements = new Map<string, { def: FlowElementDef; handler: FlowElementHandler }>();
+
+export function registerFlowElement(
+	type: string,
+	def: FlowElementDef,
+	handler: FlowElementHandler
+): void {
+	externalElements.set(type, { def, handler });
+}
+
+function allElementDefs(): FlowElementDef[] {
+	return [...FLOW_ELEMENTS, ...[...externalElements.values()].map((e) => e.def)];
+}
+
 export function flowElementLabel(type: string): string {
-	return FLOW_ELEMENTS.find((e) => e.type === type)?.label ?? type;
+	return allElementDefs().find((e) => e.type === type)?.label ?? type;
 }
 
 export function flowElementIcon(type: string): string {
-	return FLOW_ELEMENTS.find((e) => e.type === type)?.icon ?? '';
+	return allElementDefs().find((e) => e.type === type)?.icon ?? '';
 }
 
 // Варианты выбора для колонок «Тип»: в ТЧ «Узлы» — колонка node_type,
@@ -63,7 +84,7 @@ export function selectOptionsFor(
 		(tableName === 'flow_nodes' && columnName === 'node_type') ||
 		(tableName === 'flow_elements' && columnName === 'element_type')
 	) {
-		return FLOW_ELEMENTS.map((e) => ({ value: e.type, label: e.label }));
+		return allElementDefs().map((e) => ({ value: e.type, label: e.label }));
 	}
 	return [];
 }
@@ -439,7 +460,8 @@ async function elementRun({
 	return await runAnotherTable(tableName, recordId);
 }
 
-// Запуск элемента по типу узла. Неизвестный тип — просто прокладывает вход.
+// Запуск элемента по типу узла. Сначала встроенные, затем внешние (модули).
+// Неизвестный тип — просто прокладывает вход.
 export async function runFlowElement(type: string, e: FlowElementInput): Promise<unknown> {
 	switch (type) {
 		case 'constant':
@@ -456,7 +478,10 @@ export async function runFlowElement(type: string, e: FlowElementInput): Promise
 			return elementCreate(e);
 		case 'run':
 			return elementRun(e);
-		default:
+		default: {
+			const ext = externalElements.get(type);
+			if (ext) return ext.handler(e);
 			return e.input ?? e.params;
+		}
 	}
 }

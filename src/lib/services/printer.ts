@@ -16,6 +16,7 @@ import {
 	saveRecordWithLines
 } from '$lib/services/actionRunner';
 import { flowLayout } from '$lib/services/flowLayout';
+import { sandboxContext } from '$lib/services/sandbox';
 
 const PRINT_FORMS_TABLE = 'print_forms';
 
@@ -409,21 +410,24 @@ export const printerService = {
 					if (t.name) subLines[t.name] = lines.filter((l) => l.table_id === t.id);
 				}
 				try {
-					const result = await runActionCode(fillCode, {
-						record,
-						records: [record],
-						lines,
-						subLines,
-						params: mergeParams(record),
-						db,
-						supabase,
-						save: saveRecordWithLines,
-						log: (...args) => console.log('[Печать]', ...args),
-						link: linkApi,
-						apiCall,
-						run: runAnotherTable,
-						flowLayout
-					});
+					const result = await runActionCode(
+						fillCode,
+						sandboxContext({
+							record,
+							records: [record],
+							lines,
+							subLines,
+							params: mergeParams(record),
+							db,
+							supabase,
+							save: saveRecordWithLines,
+							log: (...args) => console.log('[Печать]', ...args),
+							link: linkApi,
+							apiCall,
+							run: runAnotherTable,
+							flowLayout
+						})
+					);
 					if (typeof result === 'string' && result.trim()) {
 						rendered = result;
 					} else if (result && typeof result === 'object') {

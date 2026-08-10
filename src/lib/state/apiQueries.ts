@@ -1,11 +1,6 @@
 import { db, type LocalColumn, type LocalRecord } from '$lib/db/indexeddb';
-import {
-	API_SERVICES_TABLE,
-	ensureColumns,
-	ensureTable,
-	hasServerRows,
-	seedRecord
-} from '$lib/state/notifications';
+import { API_SERVICES_TABLE } from '$lib/state/notifications';
+import { ensureColumns, ensureTable, hasServerRows, seedRecord } from '$lib/state/seed';
 
 // Модуль «API-запросы»: документ-каталог внешних запросов. Каждая запись =
 // один внешний API-вызов: ссылка на сервис (каталог «Сервисы API») + входные

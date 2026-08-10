@@ -1,6 +1,7 @@
 import { db, type LocalColumn } from '$lib/db/indexeddb';
 import { supabase } from '$lib/db/supabase';
-import { API_SERVICES_TABLE, ensureColumns, ensureTable } from '$lib/state/notifications';
+import { API_SERVICES_TABLE } from '$lib/state/notifications';
+import { ensureColumns, ensureTable } from '$lib/state/seed';
 
 // Модуль «Сценарии»: таблица (тип 'flow') с графом как в n8n. Одна запись =
 // одна схема; узлы и связи — табличные части этой записи, поэтому сценарий

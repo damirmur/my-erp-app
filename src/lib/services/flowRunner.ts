@@ -5,11 +5,10 @@ import {
 	runActionCode,
 	apiCall,
 	saveRecordWithLines,
-	runAnotherTable,
-	type RunActionContext
+	runAnotherTable
 } from '$lib/services/actionRunner';
 import { runFlowElement, type FlowElementInput } from '$lib/services/flowElements';
-import { importStatement } from '$lib/services/bankParser';
+import { sandboxContext } from '$lib/services/sandbox';
 
 // Движок исполнения сценария (тип таблицы 'flow', граф как в n8n).
 //
@@ -156,7 +155,7 @@ async function executeNode(
 	}
 
 	if (code) {
-		const ctx: RunActionContext = {
+		const ctx = sandboxContext({
 			record: scenario,
 			records: [scenario],
 			lines: scenarioLines,
@@ -172,9 +171,8 @@ async function executeNode(
 			link: linkApi,
 			apiCall,
 			run: runAnotherTable,
-			flow: flowHelper,
-			importStatement
-		};
+			flow: flowHelper
+		});
 		return await runActionCode(code, ctx);
 	}
 

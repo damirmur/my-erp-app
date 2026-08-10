@@ -2,11 +2,8 @@ import { db } from '$lib/db/indexeddb';
 import { workspace } from '$lib/state/workspace.svelte';
 import { htmlToBase64, printerService } from '$lib/services/printer';
 import { autoFillDocumentFields, todayIso } from '$lib/services/numbers';
-import {
-	findTableIdByName,
-	NOTIFY_MESSAGES_TABLE,
-	NOTIFY_MESSAGE_CHANNELS_TABLE
-} from '$lib/state/notifications';
+import { NOTIFY_MESSAGES_TABLE, NOTIFY_MESSAGE_CHANNELS_TABLE } from '$lib/state/notifications';
+import { findTableIdByName } from '$lib/state/seed';
 
 // Модуль «Доставка документа»: «✉️ Отправить» не шлёт сразу, а создаёт документ
 // «Сообщение» с отрендеренной печатной формой (текст + HTML-вложение) и

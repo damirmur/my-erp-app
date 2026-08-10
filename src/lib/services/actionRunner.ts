@@ -3,16 +3,16 @@ import { supabase } from '$lib/db/supabase';
 import { buildRecordUrl, linkApi } from '$lib/services/deeplink';
 import { workspace } from '$lib/state/workspace.svelte';
 import { flowHelper, type FlowStep } from '$lib/services/flowRunner';
-import { importStatement } from '$lib/services/bankParser';
 import { flowLayout } from '$lib/services/flowLayout';
 import { autoFillDocumentFields } from '$lib/services/numbers';
+import { sandboxContext } from '$lib/services/sandbox';
 
 // Контекст, передаваемый в пользовательский код действия «Выполнить».
 // Доступно из кода: record, records, lines, params, db, supabase, save(), log(),
 // link, apiCall(), run(), flow(), importStatement(). В узлах сценария
 // дополнительно: input (результат предыдущего узла), inputs (все входы по ролям).
-// В коде-парсере банка (importStatement) дополнительно: text (текст PDF),
-// rows (строки таблицы), helpers (утилиты num/amount/date/hint).
+// Модульные хелперы (parsePdf, importStatement и т.д.) добавляются песочницей
+// (sandboxContext) — ядро их не знает.
 export interface RunActionContext {
 	record: LocalRecord | null; // Текущая запись (в форме — открытая; в списке — первая выбранная)
 	records: LocalRecord[]; // Выбранные записи (в форме — [record])
@@ -28,42 +28,19 @@ export interface RunActionContext {
 	input?: unknown; // В узлах сценария: результат предшествующего узла (роль flow/input)
 	inputs?: Record<string, unknown>; // В узлах сценария: все входы по ролям связей
 	flow?: (recordId: string, params?: Record<string, any>) => Promise<unknown>; // Выполнить сценарий
-	importStatement?: typeof importStatement; // Импорт банковской выписки из PDF
-	text?: string; // В коде-парсера банка: весь текст PDF
-	rows?: unknown[]; // В коде-парсера банка: строки таблицы из координат
-	helpers?: Record<string, any>; // В коде-парсера банка: утилиты num/amount/date/hint
 	subLines?: Record<string, LocalLine[]>; // В коде печатной формы: строки ТЧ по имени табличной части
 	flowLayout?: typeof flowLayout; // В коде печатной формы: раскладка графа сценария (волны/связи/циклы)
+	[key: string]: unknown; // Модульные хелперы песочницы (parsePdf, importStatement и т.д.)
 }
 
 // Выполнение JS-кода действия в браузере. Код — тело async-функции.
 // Переменные контекста (record, records, lines, params, db, supabase, save,
 // log, link, apiCall, run, flow, input, inputs) доступны в коде как локальные
-// имена без префикса ctx.
+// имена без префикса ctx. Список имён берётся динамически из ключей ctx —
+// поэтому зарегистрированные модульные хелперы тоже доступны по имени.
 export async function runActionCode(code: string, ctx: RunActionContext): Promise<unknown> {
-	const paramNames = [
-		'record',
-		'records',
-		'lines',
-		'params',
-		'db',
-		'supabase',
-		'save',
-		'log',
-		'link',
-		'apiCall',
-		'run',
-		'flow',
-		'input',
-		'inputs',
-		'importStatement',
-		'text',
-		'rows',
-		'helpers',
-		'subLines',
-		'flowLayout'
-	];
-	const values = paramNames.map((k) => (ctx as unknown as Record<string, unknown>)[k]);
+	const paramNames = Object.keys(ctx);
+	const values = paramNames.map((k) => ctx[k]);
 	const fn = new Function(...paramNames, `return (async () => {\n${code}\n})();`);
 	return await fn(...values);
 }
@@ -101,21 +78,23 @@ export async function runAnotherTable(tableName: string, recordId: string): Prom
 	const record = await db.data_records.get(recordId);
 	if (!record) throw new Error('Запись не найдена: ' + recordId);
 	const lines = await db.data_lines.where('record_id').equals(recordId).toArray();
-	return await runActionCode(code, {
-		record,
-		records: [record],
-		lines,
-		params: mergeParams(record),
-		db,
-		supabase,
-		save: saveRecordWithLines,
-		log: (...args) => console.log('[Выполнить]', ...args),
-		link: linkApi,
-		apiCall,
-		run: runAnotherTable,
-		flow: flowHelper,
-		importStatement
-	});
+	return await runActionCode(
+		code,
+		sandboxContext({
+			record,
+			records: [record],
+			lines,
+			params: mergeParams(record),
+			db,
+			supabase,
+			save: saveRecordWithLines,
+			log: (...args) => console.log('[Выполнить]', ...args),
+			link: linkApi,
+			apiCall,
+			run: runAnotherTable,
+			flow: flowHelper
+		})
+	);
 }
 
 // API-режим: выполнить код действия таблицы по конкретной записи без открытия
@@ -190,21 +169,23 @@ export async function runRecordAction(
 			};
 		}
 		const lines = await db.data_lines.where('record_id').equals(record.id).toArray();
-		const value = await runActionCode(code, {
-			record,
-			records: [record],
-			lines,
-			params,
-			db,
-			supabase,
-			save: saveRecordWithLines,
-			log: (...args) => console.log('[Выполнить API]', ...args),
-			link: linkApi,
-			apiCall,
-			run: runAnotherTable,
-			flow: flowHelper,
-			importStatement
-		});
+		const value = await runActionCode(
+			code,
+			sandboxContext({
+				record,
+				records: [record],
+				lines,
+				params,
+				db,
+				supabase,
+				save: saveRecordWithLines,
+				log: (...args) => console.log('[Выполнить API]', ...args),
+				link: linkApi,
+				apiCall,
+				run: runAnotherTable,
+				flow: flowHelper
+			})
+		);
 		return { ok: true, value, steps: extractSteps(value), isFlow };
 	} catch (e: any) {
 		return { ok: false, error: e?.message ?? String(e), steps: (e as any)?.steps, isFlow };

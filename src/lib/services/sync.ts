@@ -1,9 +1,7 @@
 import { supabase } from '$lib/db/supabase';
 import { db, type LocalRecord, type LocalLine } from '$lib/db/indexeddb';
 import { metadata } from '$lib/state/metadata';
-import { seedNotificationDefaults } from '$lib/state/notifications';
-import { seedApiQueryDefaults } from '$lib/state/apiQueries';
-import { seedPrintFormDefaults } from '$lib/state/printForms';
+import { CORE_MODULES, DEFAULT_MODULES, seedModule } from '$lib/state/modules';
 
 // Ключ в localStorage: максимальная серверная updated_at из последнего pull.
 // Не зависит от локальных записей, поэтому сиды/история не могут сдвинуть
@@ -250,12 +248,13 @@ export const syncService = {
 			await this.pullMetadata(); // Сначала конфигурация
 			await this.pushLocalChanges(); // Затем отдаем свои изменения
 			await this.pullDataChanges(); // В конце забираем чужие изменения
-			// Сиды справочников уведомлений — только после загрузки данных,
-			// иначе их свежие updated_at сдвинут вотермарк pullDataChanges и
-			// серверные записи (получатели, сообщения) не попадут в кэш.
-			await seedNotificationDefaults();
-			await seedApiQueryDefaults();
-			await seedPrintFormDefaults();
+			// Сиды справочников — только после загрузки данных, иначе их свежие
+			// updated_at сдвинут вотермарк pullDataChanges и серверные записи не
+			// попадут в кэш. Опциональные модули (банк, api-запросы и т.д.)
+			// сидятся при своей установке, boot их не трогает.
+			for (const mod of [...CORE_MODULES, ...DEFAULT_MODULES]) {
+				await seedModule(mod);
+			}
 			console.log('Синхронизация завершена.');
 		} finally {
 			running = false;

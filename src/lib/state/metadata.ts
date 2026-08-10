@@ -2,10 +2,103 @@ import { supabase } from '$lib/db/supabase';
 import { db, type LocalColumn } from '$lib/db/indexeddb';
 import { getTableType } from '$lib/table-types';
 import { CORE_MODULES, DEFAULT_MODULES, ensureModule } from '$lib/state/modules';
+import { APP_SETTINGS_TABLE } from '$lib/state/settings';
+
+// Версия метаданных: системная запись app_settings с ключом meta_version
+// (значение — ISO-метка последнего изменения конфигурации). pullMetadata
+// перекачивает meta_tables/meta_columns только когда версия на сервере
+// отличается от локальной — иначе конфигурацию не перекачиваем вообще.
+export const META_VERSION_KEY = 'meta_version';
+export const META_VERSION_LOCAL_KEY = 'erp_meta_version';
+
+// id таблицы настроек из локального кэша (после boot он гарантированно есть).
+async function settingsTableId(): Promise<string | null> {
+	return (await db.meta_tables.where('name').equals(APP_SETTINGS_TABLE).first())?.id ?? null;
+}
+
+// Версия метаданных на сервере (или null, если запись ещё не создана).
+export async function getServerMetaVersion(): Promise<string | null> {
+	const tableId = await settingsTableId();
+	if (!tableId) return null;
+	try {
+		const { data } = await supabase
+			.from('data_records')
+			.select('data')
+			.eq('table_id', tableId)
+			.limit(1000);
+		const rec = (data ?? []).find((r: any) => r.data?.key === META_VERSION_KEY);
+		return typeof rec?.data?.version === 'string' ? rec.data.version : null;
+	} catch {
+		return null; // сервер недоступен — считаем версию неизвестной
+	}
+}
+
+// Записать новую версию метаданных на сервер (после изменения конфигурации).
+// Пишем напрямую в Supabase (системный счётчик, локальный кэш не трогаем).
+export async function bumpMetaVersion(): Promise<void> {
+	const tableId = await settingsTableId();
+	if (!tableId) return;
+	const version = new Date().toISOString();
+	try {
+		const { data } = await supabase
+			.from('data_records')
+			.select('id')
+			.eq('table_id', tableId)
+			.limit(1000);
+		const rec = (data ?? []).find((r: any) => r.data?.key === META_VERSION_KEY);
+		const payload = {
+			table_id: tableId,
+			status: 'draft',
+			is_folder: false,
+			parent_id: null,
+			data: { key: META_VERSION_KEY, version },
+			updated_at: version
+		};
+		await supabase.from('data_records').upsert({ id: rec?.id ?? crypto.randomUUID(), ...payload });
+	} catch {
+		// сервер недоступен — версия обновится при следующем изменении
+	}
+}
+
+// Создать запись версии метаданных на сервере (первый pull без записи).
+export async function ensureMetaVersionRecord(): Promise<string | null> {
+	const version = new Date().toISOString();
+	const tableId = await settingsTableId();
+	if (!tableId) return null;
+	try {
+		await supabase.from('data_records').insert({
+			id: crypto.randomUUID(),
+			table_id: tableId,
+			status: 'draft',
+			is_folder: false,
+			parent_id: null,
+			data: { key: META_VERSION_KEY, version },
+			updated_at: version
+		});
+		return version;
+	} catch {
+		return null;
+	}
+}
 
 // Имя системной таблицы-истории действий. Уникально в meta_tables, используется
 // для поиска таблицы и в recordHistory/clearHistory/сайдбаре.
 export const HISTORY_TABLE_NAME = 'history';
+
+// Версия кода-сидов системных таблиц. Сохраняется в localStorage при успешном
+// онлайн-прогоне ensureSystemTables. На «тёплом» старте (версия совпадает и
+// все маркерные таблицы есть в локальном кэше) сетевые проверки/создания
+// пропускаются — это убирает ~40-45 последовательных запросов при каждой
+// загрузке страницы. Увеличивайте при изменении состава/структуры сидов.
+const SYSTEM_SEED_VERSION = 1;
+export const SEED_VERSION_KEY = 'erp_system_seed_version';
+
+// Маркерные таблицы системных модулей (по одной на модуль) + «История».
+const SEED_MARKER_TABLES = [
+	HISTORY_TABLE_NAME,
+	...CORE_MODULES.map((m) => m.tables[0]),
+	...DEFAULT_MODULES.map((m) => m.tables[0])
+];
 
 // Колонки системной таблицы «История». В Supabase type — enum column_type,
 // который не содержит 'datetime'/'birth', поэтому для времени используем 'date'
@@ -39,6 +132,18 @@ function slugify(text: string): string {
 	return slug || `tbl_${Date.now().toString(36)}`;
 }
 
+// «Тёплый» старт: версия сидов уже сохранена в localStorage и все маркерные
+// таблицы присутствуют в локальном кэше → сетевые проверки не нужны.
+async function canSkipSystemEnsure(): Promise<boolean> {
+	if (typeof localStorage === 'undefined') return false;
+	if (localStorage.getItem(SEED_VERSION_KEY) !== String(SYSTEM_SEED_VERSION)) return false;
+	for (const name of SEED_MARKER_TABLES) {
+		const t = await db.meta_tables.where('name').equals(name).first();
+		if (!t) return false;
+	}
+	return true;
+}
+
 class MetadataManager {
 	// Уже обеспечили системные таблицы в этой сессии, будучи онлайн? Тогда
 	// серверные id каноничны, и повторные вызовы (в начале каждого синка) можно
@@ -58,6 +163,13 @@ class MetadataManager {
 			// Офлайн-прогон: создаём локальные таблицы, но канонические id не
 			// гарантируем — следующий онлайн-прогон должен сверить их с сервером.
 			this.systemEnsuredOnline = false;
+		}
+
+		// Тёплый старт: таблицы уже обеспечены в прошлой сессии (версия сидов
+		// сохранена, маркерные таблицы на месте) — пропускаем ~40-45 запросов.
+		if (online && (await canSkipSystemEnsure())) {
+			this.systemEnsuredOnline = true;
+			return;
 		}
 
 		// 1. Найти или создать таблицу в Supabase. Ищем по name; если на сервере
@@ -156,7 +268,10 @@ class MetadataManager {
 			await ensureModule(mod);
 		}
 
-		if (online) this.systemEnsuredOnline = true;
+		if (online) {
+			this.systemEnsuredOnline = true;
+			localStorage.setItem(SEED_VERSION_KEY, String(SYSTEM_SEED_VERSION));
+		}
 	}
 
 	// Колонки истории: проверяет и создаёт недостающие на сервере (если онлайн)
@@ -251,20 +366,26 @@ class MetadataManager {
 				]);
 			}
 		}
+		if (data) await bumpMetaVersion();
 		return data ? data.id : null;
 	}
 
 	// Явное удаление реквизита объекта
 	async deleteColumn(columnId: string) {
 		const { error } = await supabase.from('meta_columns').delete().eq('id', columnId);
-		if (error) alert(`Ошибка удаления поля: ${error.message}`);
-		else alert('Реквизит успешно удален из метаданных!');
+		if (error) {
+			alert(`Ошибка удаления поля: ${error.message}`);
+		} else {
+			alert('Реквизит успешно удален из метаданных!');
+			await bumpMetaVersion();
+		}
 	}
 
 	// Удаление реквизита без всплывающих уведомлений (для пакетного сохранения)
 	async deleteColumnQuiet(columnId: string) {
 		const { error } = await supabase.from('meta_columns').delete().eq('id', columnId);
 		if (error) alert(`Ошибка удаления поля: ${error.message}`);
+		else await bumpMetaVersion();
 	}
 
 	// Каскадное удаление таблицы вместе с её табличными частями, реквизитами и данными
@@ -282,8 +403,15 @@ class MetadataManager {
 		if (lineErr) alert(`Ошибка удаления строк ТЧ: ${lineErr.message}`);
 		const { error: recErr } = await supabase.from('data_records').delete().in('table_id', allIds);
 		if (recErr) alert(`Ошибка удаления данных: ${recErr.message}`);
+		const deletedRecs = await db.data_records.where('table_id').anyOf(allIds).toArray();
 		await db.data_lines.where('table_id').anyOf(allIds).delete();
 		await db.data_records.where('table_id').anyOf(allIds).delete();
+		if (deletedRecs.length > 0) {
+			await db.data_files
+				.where('record_id')
+				.anyOf(deletedRecs.map((r) => r.id))
+				.delete();
+		}
 
 		for (const sid of subIds) {
 			const { error } = await supabase.from('meta_columns').delete().eq('table_id', sid);
@@ -294,6 +422,7 @@ class MetadataManager {
 
 		const { error: subErr } = await supabase.from('meta_tables').delete().in('id', allIds);
 		if (subErr) alert(`Ошибка удаления таблицы: ${subErr.message}`);
+		else await bumpMetaVersion();
 	}
 
 	async saveOrUpdateColumn(
@@ -315,6 +444,7 @@ class MetadataManager {
 			result = await supabase.from('meta_columns').update(columnData).eq('id', colId);
 		}
 		if (result.error) alert(`Ошибка сохранения реквизита: ${result.error.message}`);
+		else await bumpMetaVersion();
 	}
 
 	// Переключение видимости реквизита в журнале (пишем сразу на сервер и в локальный кэш,
@@ -327,6 +457,7 @@ class MetadataManager {
 		}
 		const col = await db.meta_columns.get(colId);
 		if (col) await db.meta_columns.put({ ...col, is_visible });
+		await bumpMetaVersion();
 		return true;
 	}
 
@@ -336,6 +467,7 @@ class MetadataManager {
 			alert(`Ошибка сохранения настроек: ${error.message}`);
 			return null;
 		}
+		await bumpMetaVersion();
 		return tableId;
 	}
 
@@ -349,6 +481,7 @@ class MetadataManager {
 		}
 		const local = await db.meta_tables.get(tableId);
 		if (local) await db.meta_tables.put({ ...local, type });
+		await bumpMetaVersion();
 		return true;
 	}
 
@@ -390,6 +523,7 @@ class MetadataManager {
 	async updateTableTitle(tableId: string, title: string) {
 		const { error } = await supabase.from('meta_tables').update({ title }).eq('id', tableId);
 		if (error) alert(`Ошибка сохранения синонима: ${error.message}`);
+		else await bumpMetaVersion();
 	}
 
 	// Переименование таблицы (поле `name`, используется как ключ: ссылки
@@ -423,6 +557,7 @@ class MetadataManager {
 		}
 		const local = await db.meta_tables.get(tableId);
 		if (local) await db.meta_tables.put({ ...local, name });
+		await bumpMetaVersion();
 		return true;
 	}
 
@@ -431,14 +566,23 @@ class MetadataManager {
 		// чтобы они не остались в локальном кэше и не сломали push
 		const { error: lineErr } = await supabase.from('data_lines').delete().eq('table_id', tableId);
 		if (lineErr) alert(`Ошибка удаления строк ТЧ: ${lineErr.message}`);
+		const deletedRecs = await db.data_records.where('table_id').equals(tableId).toArray();
 		await db.data_lines.where('table_id').equals(tableId).delete();
+		if (deletedRecs.length > 0) {
+			await db.data_files
+				.where('record_id')
+				.anyOf(deletedRecs.map((r) => r.id))
+				.delete();
+		}
 		const { error } = await supabase.from('meta_tables').delete().eq('id', tableId);
 		if (error) alert(`Ошибка удаления таблицы: ${error.message}`);
+		else await bumpMetaVersion();
 	}
 
 	async deleteColumnsByTable(tableId: string) {
 		const { error } = await supabase.from('meta_columns').delete().eq('table_id', tableId);
 		if (error) alert(`Ошибка удаления колонок: ${error.message}`);
+		else await bumpMetaVersion();
 	}
 }
 

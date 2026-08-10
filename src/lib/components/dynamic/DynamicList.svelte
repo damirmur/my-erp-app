@@ -7,6 +7,7 @@
 	import { getTableType, getEffectiveConfig } from '$lib/table-types';
 	import { formatFieldValue } from '$lib/fields';
 	import { physicalDeleteRecords } from '$lib/services/records';
+	import { copyFilesInObject } from '$lib/services/files';
 	import { runRecordAction, mergeParams } from '$lib/services/actionRunner';
 	import { fireTriggers } from '$lib/services/triggers';
 	import { metadata } from '$lib/state/metadata';
@@ -40,7 +41,15 @@
 
 	// Поиск по списку: при непустом запросе ищем по всему каталогу (вне
 	// зависимости от текущей группы) по всем видимым колонкам.
+	// Ввод дебаунсится (searchInput → searchQuery через 150 мс), чтобы не
+	// пересчитывать фильтр на каждое нажатие клавиши.
+	let searchInput = $state('');
 	let searchQuery = $state('');
+
+	// Виртуализация: в DOM рендерим только видимый срез записей, остальное
+	// догружается скроллом или кнопкой «Показать ещё».
+	const PAGE_SIZE = 200;
+	let visibleCount = $state(PAGE_SIZE);
 
 	let sortField = $state<string>('number');
 	let sortDirection = $state<'asc' | 'desc'>('asc');
@@ -48,6 +57,18 @@
 	let tableType = $derived(tableMeta?.type ?? 'document');
 	let tableTypeDef = $derived(getTableType(tableType));
 	let isHierarchical = $derived(getEffectiveConfig(tableMeta).features.hierarchy);
+
+	// Дебаунс поиска: задержка 150 мс; при изменении запроса сбрасываем порцию.
+	let searchTimer: ReturnType<typeof setTimeout> | undefined;
+	$effect(() => {
+		const q = searchInput;
+		clearTimeout(searchTimer);
+		searchTimer = setTimeout(() => {
+			searchQuery = q.trim().toLowerCase();
+			visibleCount = PAGE_SIZE;
+		}, 150);
+		return () => clearTimeout(searchTimer);
+	});
 
 	// Для печатных форм колонка target_table хранит id таблицы — показываем её
 	// заголовок (мапа id → title).
@@ -110,6 +131,8 @@
 
 	$effect(() => {
 		loading = true;
+		visibleCount = PAGE_SIZE;
+		searchInput = '';
 		db.meta_tables.get(tableId).then((meta) => {
 			tableMeta = meta ?? null;
 		});
@@ -200,6 +223,25 @@
 			return 0;
 		});
 	});
+
+	// Видимый срез записей (все записи таблицы держим в памяти для поиска/
+	// сортировки, в DOM выводим только видимую часть).
+	let visibleRecords = $derived(filteredAndSortedRecords.slice(0, visibleCount));
+
+	function loadMore() {
+		visibleCount = Math.min(filteredAndSortedRecords.length, visibleCount + PAGE_SIZE);
+	}
+
+	// Догрузка при прокрутке к нижнему краю таблицы.
+	function scrollMore(node: HTMLElement) {
+		const onScroll = () => {
+			if (node.scrollTop + node.clientHeight >= node.scrollHeight - 300) loadMore();
+		};
+		node.addEventListener('scroll', onScroll);
+		return {
+			destroy: () => node.removeEventListener('scroll', onScroll)
+		};
+	}
 
 	function changeSort(fieldName: string) {
 		if (sortField === fieldName) {
@@ -394,6 +436,9 @@
 		});
 		const nextFreeNumber = newRecordData.number ?? '';
 
+		// Вложения копии клонируем в хранилище (независимо от оригинала).
+		const storedCopy = await copyFilesInObject(newRecordData, newRecordId);
+
 		await db.transaction('rw', [db.data_records, db.data_lines], async () => {
 			await db.data_records.put({
 				id: newRecordId,
@@ -401,16 +446,17 @@
 				status: 'draft',
 				is_folder: false,
 				parent_id: currentFolderId,
-				data: newRecordData,
+				data: storedCopy,
 				is_dirty: 1,
 				updated_at: new Date().toISOString()
 			});
 			for (const line of sourceLines) {
+				const lineData = await copyFilesInObject({ ...line.data }, newRecordId);
 				await db.data_lines.put({
 					id: crypto.randomUUID(),
 					record_id: newRecordId,
 					table_id: line.table_id,
-					data: { ...line.data },
+					data: lineData,
 					sort_order: line.sort_order
 				});
 			}
@@ -734,7 +780,7 @@
 		<span class="list-search-icon">🔍</span>
 		<input
 			type="text"
-			bind:value={searchQuery}
+			bind:value={searchInput}
 			placeholder="Поиск по списку..."
 			class="list-search-input"
 			title="Поиск по всем колонкам (при непустом запросе — по всему каталогу)"
@@ -790,7 +836,7 @@
 	{#if loading}
 		<div class="loading-state">Загрузка журнала...</div>
 	{:else}
-		<div class="table-wrapper">
+		<div class="table-wrapper" use:scrollMore>
 			<table class="erp-table">
 				<thead>
 					<tr>
@@ -824,7 +870,7 @@
 							></tr
 						>
 					{:else}
-						{#each filteredAndSortedRecords as record (record.id)}
+						{#each visibleRecords as record (record.id)}
 							<tr
 								class="data-row"
 								class:selected={selectedIds.includes(record.id)}
@@ -992,6 +1038,13 @@
 					{/if}
 				</tbody>
 			</table>
+			{#if visibleRecords.length < filteredAndSortedRecords.length}
+				<div class="load-more-row">
+					<button onclick={loadMore} class="load-more-btn">
+						Показать ещё ({filteredAndSortedRecords.length - visibleRecords.length})
+					</button>
+				</div>
+			{/if}
 		</div>
 	{/if}
 </div>
@@ -1216,5 +1269,21 @@
 		padding: 2rem;
 		color: #64748b;
 		text-align: center;
+	}
+	.load-more-row {
+		padding: 0.5rem;
+		text-align: center;
+	}
+	.load-more-btn {
+		background: #ffffff;
+		border: 1px solid #cbd5e1;
+		border-radius: 4px;
+		font-size: 0.85rem;
+		padding: 6px 16px;
+		cursor: pointer;
+		color: #2563eb;
+	}
+	.load-more-btn:hover {
+		background: #eff6ff;
 	}
 </style>

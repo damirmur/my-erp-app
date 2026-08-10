@@ -1,4 +1,5 @@
-import type { LocalColumn } from '$lib/db/indexeddb';
+import { supabase } from '$lib/db/supabase';
+import { db, type LocalColumn, type LocalTable } from '$lib/db/indexeddb';
 import { ensureColumns, ensureTable } from '$lib/state/seed';
 
 // Модуль «Банковские выписки»: импорт выписок из PDF. Таблицы создаются
@@ -188,6 +189,53 @@ export async function ensureBankStatementTables(): Promise<void> {
 	});
 	if (!statementsId) return;
 	await ensureColumns(statementsId, statementColumns(accountsId, banksId), online);
+
+	// Сверка типа и конфига у существующих установок: ранние версии создавали
+	// «Выписки» справочником (type='directory'). Приводим к документу
+	// идемпотентно — записи, ТЧ и вложения не трогаем (они привязаны по id).
+	const expectedConfig = {
+		features: { create: true, save: true, copy: true, delete: true, run: true },
+		runCode: BANK_STATEMENT_RUN_CODE
+	};
+	if (online) {
+		try {
+			const { data: serverTable } = await supabase
+				.from('meta_tables')
+				.select('type,config')
+				.eq('id', statementsId)
+				.single();
+			const needsType = serverTable?.type !== 'document';
+			const needsConfig =
+				serverTable?.config?.features?.run !== true ||
+				serverTable?.config?.runCode !== BANK_STATEMENT_RUN_CODE;
+			if (needsType) {
+				await supabase.from('meta_tables').update({ type: 'document' }).eq('id', statementsId);
+			}
+			if (needsConfig) {
+				const merged = { ...(serverTable?.config ?? {}), ...expectedConfig };
+				await supabase
+					.from('meta_tables')
+					.update({ config: { ...merged, features: { ...merged.features, run: true } } })
+					.eq('id', statementsId);
+			}
+		} catch {
+			// сервер недоступен — достаточно локального обновления
+		}
+	}
+	const localTable = await db.meta_tables.get(statementsId);
+	if (localTable) {
+		const patch: Partial<LocalTable> = {};
+		if (localTable.type !== 'document') patch.type = 'document';
+		const cfg = localTable.config ?? {};
+		if (cfg.features?.run !== true || cfg.runCode !== BANK_STATEMENT_RUN_CODE) {
+			patch.config = {
+				...cfg,
+				features: { ...cfg.features, run: true },
+				runCode: BANK_STATEMENT_RUN_CODE
+			};
+		}
+		if (Object.keys(patch).length > 0) await db.meta_tables.update(statementsId, patch);
+	}
 
 	const operationsId = await ensureTable(
 		BANK_OPERATIONS_TABLE,

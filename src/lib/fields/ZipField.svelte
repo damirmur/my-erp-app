@@ -5,6 +5,7 @@
 		checkFileSize,
 		downloadBlob,
 		formatBytes,
+		hydrateFileValue,
 		MAX_FILE_SIZE,
 		type StoredZip
 	} from '$lib/services/files';
@@ -84,10 +85,12 @@
 
 	onMount(async () => {
 		const cur = current;
-		if (!cur || !cur.data) return;
+		if (!cur) return;
 		busy = true;
 		try {
-			entries = await readEntries(base64ToBlob(cur.data, 'application/zip'));
+			const file = ((await hydrateFileValue(cur)) ?? cur) as StoredZip;
+			if (!file || !file.data) return;
+			entries = await readEntries(base64ToBlob(file.data, 'application/zip'));
 		} catch (err) {
 			console.error('Ошибка чтения архива:', err);
 			alert('Не удалось прочитать содержимое ZIP-архива');
@@ -143,10 +146,12 @@
 		}
 	}
 
-	function handleDownload() {
+	async function handleDownload() {
 		const cur = current;
-		if (!cur || !cur.data) return;
-		downloadBlob(base64ToBlob(cur.data, 'application/zip'), cur.name);
+		if (!cur) return;
+		const file = ((await hydrateFileValue(cur)) ?? cur) as StoredZip;
+		if (!file || !file.data) return;
+		downloadBlob(base64ToBlob(file.data, 'application/zip'), file.name);
 	}
 </script>
 

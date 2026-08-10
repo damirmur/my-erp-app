@@ -1,6 +1,6 @@
 import { ensureNotificationTables, seedNotificationDefaults } from '$lib/state/notifications';
 import { ensureFlowTables } from '$lib/state/flows';
-import { ensurePrintFormsTable, seedPrintFormDefaults } from '$lib/state/printForms';
+import { ensurePrintFormsTable } from '$lib/state/printForms';
 import { ensureSettingsTable } from '$lib/state/settings';
 import { ensureBankStatementTables } from '$lib/state/bankStatements';
 import { ensureApiQueryTables, seedApiQueryDefaults } from '$lib/state/apiQueries';
@@ -50,8 +50,7 @@ export const CORE_MODULES: ModuleDef[] = [
 		description: 'Реестр шаблонов печати (HTML/SVG) и способы вывода документов.',
 		group: 'core',
 		tables: ['print_forms'],
-		ensure: ensurePrintFormsTable,
-		seedDefaults: seedPrintFormDefaults
+		ensure: ensurePrintFormsTable
 	}
 ];
 

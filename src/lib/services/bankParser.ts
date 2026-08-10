@@ -10,7 +10,7 @@ import {
 	type RunActionContext
 } from '$lib/services/actionRunner';
 import { BANKS_TABLE, BANK_ACCOUNTS_TABLE, BANK_OPERATIONS_TABLE } from '$lib/state/bankStatements';
-import type { StoredFile } from '$lib/services/files';
+import { hydrateFileValue, type StoredFile } from '$lib/services/files';
 
 // Движок импорта банковских выписок из PDF.
 //
@@ -179,7 +179,7 @@ export async function importStatement(
 	const record = await db.data_records.get(recordId);
 	if (!record) throw new Error('Запись выписки не найдена: ' + recordId);
 
-	const file = record.data?.file as StoredFile | undefined;
+	const file = (await hydrateFileValue(record.data?.file)) as StoredFile | null;
 	if (!file || !file.data) {
 		throw new Error('К выписке не прикреплён файл PDF (поле «Файл PDF»)');
 	}

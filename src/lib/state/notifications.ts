@@ -14,13 +14,6 @@ import {
 // рассылки через внешний endpoint (например, /api/notify). Таблицы создаются
 // идемпотентно (код-сид) при старте приложения и в начале каждого цикла
 // синхронизации — по паттерну системной таблицы «История».
-//
-// Раньше каталог назывался notify_providers — переименован в api_services с
-// одноразовой миграцией данных (см. migrateLegacyNotifyProviders). Получатели
-// были отдельным справочником notify_recipients с полями tg_id/vk_id/email —
-// теперь это подчинённая контрагентам табличная часть «Контакты»
-// (contragent_contacts), строка = канал + значение. Старый справочник
-// удалён (seed больше не создаёт его).
 
 export const API_SERVICES_TABLE = 'api_services';
 export const NOTIFY_CHANNELS_TABLE = 'notify_channels';
@@ -30,8 +23,6 @@ export const NOTIFY_MESSAGE_CHANNELS_TABLE = 'notify_message_channels';
 // Табличная часть «Контакты» у контрагентов: строки хранятся в data_lines
 // (record_id = id контрагента), каждая строка = канал отправки + значение.
 export const CONTACT_TABLE = 'contragent_contacts';
-
-const LEGACY_PROVIDERS_TABLE = 'notify_providers';
 
 // Код действия «▶️ Выполнить» документа «Сообщение»: собирает JSON и отправляет
 // через apiCall по записи каталога «Сервисы API». Выполняется в браузере
@@ -278,131 +269,24 @@ function messageRecipientColumns(counterpartiesId: string, channelsId: string): 
 	];
 }
 
-// Есть ли в каталоге «Сервисы API» запись с данным name (на сервере или локально).
-// Нужно для досева новых дефолтных сервисов в уже заполненный каталог.
-async function serviceExists(servicesId: string, name: string, online: boolean): Promise<boolean> {
-	if (online) {
-		try {
-			const { data } = await supabase
-				.from('data_records')
-				.select('data')
-				.eq('table_id', servicesId)
-				.limit(1000);
-			if ((data ?? []).some((r: any) => r.data?.name === name)) return true;
-		} catch {
-			// сервер недоступен — проверяем локальный кэш
-		}
-	}
+// Есть ли в каталоге «Сервисы API» запись с данным name (локально или на сервере).
+// После pullDataChanges локальный кэш полон, поэтому сначала проверяем его —
+// серверный запрос делаем только если локально каталог пуст (один раз, а не
+// по одному запросу на каждое имя — раньше это было ~10 запросов каждый цикл).
+async function collectServiceNames(servicesId: string, online: boolean): Promise<Set<string>> {
 	const local = await db.data_records.where('table_id').equals(servicesId).toArray();
-	return local.some((r) => r.data?.name === name);
-}
-
-// Маппинг данных старой записи notify_providers → api_services.
-function migratedServiceData(d: Record<string, any>): Record<string, any> {
-	return {
-		number: d.number ?? '',
-		name: d.name ?? '',
-		base_url: d.endpoint ?? d.base_url ?? '',
-		method: d.method ?? 'POST',
-		auth_type: d.auth_type ?? 'query',
-		auth_param: d.auth_param ?? 'notify_key',
-		api_key: d.api_key ?? '',
-		headers: d.headers ?? '{}',
-		use_proxy: d.use_proxy !== undefined ? d.use_proxy : true,
-		is_active: d.is_active !== false
-	};
-}
-
-// Одноразовая миграция notify_providers → api_services (идемпотентна: если
-// старой таблицы уже нет ни на сервере, ни локально — делать нечего). Переносит
-// записи data_records (id сохраняются, поэтому ссылки в «Сообщении» продолжают
-// работать), переводит колонку-ссылку provider на новый id таблицы и удаляет
-// старую таблицу вместе с колонками.
-async function migrateLegacyNotifyProviders(online: boolean): Promise<void> {
-	let legacyServerId: string | null = null;
-	if (online) {
-		try {
-			const { data } = await supabase
-				.from('meta_tables')
-				.select('id')
-				.eq('name', LEGACY_PROVIDERS_TABLE)
-				.order('id', { ascending: true })
-				.limit(1);
-			legacyServerId = data?.[0]?.id ?? null;
-		} catch {
-			legacyServerId = null;
-		}
+	const localNames = new Set(local.map((r) => String(r.data?.name ?? '')).filter(Boolean));
+	if (localNames.size > 0 || !online) return localNames;
+	try {
+		const { data } = await supabase
+			.from('data_records')
+			.select('data')
+			.eq('table_id', servicesId)
+			.limit(1000);
+		return new Set((data ?? []).map((r: any) => String(r.data?.name ?? '')).filter(Boolean));
+	} catch {
+		return localNames; // сервер недоступен — сверяемся только с локальным кэшем
 	}
-
-	const legacyLocal = await db.meta_tables.where('name').equals(LEGACY_PROVIDERS_TABLE).toArray();
-	const legacyIds = Array.from(
-		new Set([...(legacyServerId ? [legacyServerId] : []), ...legacyLocal.map((r) => r.id)])
-	);
-	if (legacyIds.length === 0) return;
-
-	const servicesId = (await db.meta_tables.where('name').equals(API_SERVICES_TABLE).first())?.id;
-	if (!servicesId) return;
-
-	// 1. Записи data_records: локально — сдвигаем в api_services с новым data.
-	for (const legacyId of legacyIds) {
-		const legacyRecords = await db.data_records.where('table_id').equals(legacyId).toArray();
-		for (const rec of legacyRecords) {
-			await db.data_records.put({
-				...rec,
-				table_id: servicesId,
-				data: migratedServiceData(rec.data ?? {}),
-				is_dirty: 1,
-				updated_at: new Date().toISOString()
-			});
-		}
-	}
-
-	// 2. Колонка-ссылка provider в «Сообщении» теперь указывает на api_services.
-	for (const legacyId of legacyIds) {
-		await db.meta_columns
-			.where('name')
-			.equals('provider')
-			.modify((col) => {
-				if (col.related_table_id === legacyId) col.related_table_id = servicesId;
-			});
-	}
-
-	// 3. Удаляем старую таблицу локально.
-	for (const legacyId of legacyIds) {
-		await db.meta_columns.where('table_id').equals(legacyId).delete();
-		await db.meta_tables.delete(legacyId);
-	}
-
-	// 4. То же на сервере (если он есть).
-	if (online && legacyServerId) {
-		try {
-			const { data: serverRows } = await supabase
-				.from('data_records')
-				.select('id, data')
-				.eq('table_id', legacyServerId);
-			for (const row of serverRows ?? []) {
-				await supabase
-					.from('data_records')
-					.update({
-						table_id: servicesId,
-						data: migratedServiceData(row.data ?? {}),
-						updated_at: new Date().toISOString()
-					})
-					.eq('id', row.id);
-			}
-			await supabase
-				.from('meta_columns')
-				.update({ related_table_id: servicesId })
-				.eq('name', 'provider')
-				.eq('related_table_id', legacyServerId);
-			await supabase.from('meta_columns').delete().eq('table_id', legacyServerId);
-			await supabase.from('meta_tables').delete().eq('id', legacyServerId);
-		} catch {
-			// серверная часть повторится при следующем цикле синхронизации
-		}
-	}
-
-	console.log('Каталог notify_providers переименован в api_services.');
 }
 
 // ТЧ «Контакты» у контрагентов: создаёт таблицу (parent = контрагенты) и
@@ -436,27 +320,6 @@ async function reconcileMessageTabular(
 	// Новые колонки (konтрагент + канал) создаются, только когда известен id контрагентов
 	if (counterpartiesId) {
 		await ensureColumns(tabularId, messageRecipientColumns(counterpartiesId, channelsId), online);
-	}
-
-	// Legacy-колонка «Получатель» (notify_recipients) больше не нужна
-	if (online) {
-		try {
-			const { data: legacyCol } = await supabase
-				.from('meta_columns')
-				.select('id')
-				.eq('table_id', tabularId)
-				.eq('name', 'recipient')
-				.limit(1);
-			if (legacyCol?.[0]?.id) {
-				await supabase.from('meta_columns').delete().eq('id', legacyCol[0].id);
-			}
-		} catch {
-			// сервер недоступен
-		}
-	}
-	const localLegacy = await db.meta_columns.where('table_id').equals(tabularId).toArray();
-	for (const col of localLegacy) {
-		if (col.name === 'recipient') await db.meta_columns.delete(col.id);
 	}
 }
 
@@ -684,12 +547,14 @@ async function seedDefaults(
 		// (например, OpenStreetMap, переводчик) досеиваем — только отсутствующие,
 		// существующие (в т.ч. отредактированные вручную) не трогаем.
 		const existingBaseUrls = new Set(services.map((r) => r.data?.base_url));
+		const existingNames = await collectServiceNames(servicesId, online);
 		for (const def of defs) {
 			const name = def.data.name;
-			if (!name || (await serviceExists(servicesId, name, online))) continue;
+			if (!name || existingNames.has(name)) continue;
 			// Защита от дублей по URL: переводчик мог быть создан вручную под другим
 			// именем — такую запись не дублируем, берём её как есть.
 			if (def.data.base_url && existingBaseUrls.has(def.data.base_url)) continue;
+			existingNames.add(name);
 			await seedRecord(
 				{
 					id: def.id ?? crypto.randomUUID(),
@@ -707,52 +572,6 @@ async function seedDefaults(
 	}
 }
 
-// Маркеры устаревших seed-версий runCode, которые стоит заменить актуальной:
-// битая версия (await внутри не-async filter), версия с прямым fetch к endpoint,
-// первая прокси-версия без ключа авторизации шлюза, версия на notify_providers,
-// версия, где сервис брался из поля «Провайдер» документа «Сообщение», и версия
-// на отдельный справочник получателей notify_recipients (line.data.recipient).
-const RUN_CODE_LEGACY = [
-	"await findTableId('notify_message_channels')",
-	"effective.data.endpoint + '?notify_key='",
-	'JSON.stringify({\n\t\turl: effective.data.endpoint,',
-	"findTableId('notify_providers')",
-	'record.data.provider',
-	'const effective = service || services.find(',
-	'line.data.recipient',
-	"findTableId('notify_recipients')"
-];
-
-// Точечное лечение runCode документа «Сообщение» на сервере: ensureTable
-// перезаписывает локальный кэш, но существующую серверную строку не трогает.
-async function reconcileMessageRunCode(messagesId: string, online: boolean): Promise<void> {
-	if (!online) return;
-	let serverConfig: Record<string, any> | null = null;
-	try {
-		const { data } = await supabase
-			.from('meta_tables')
-			.select('config')
-			.eq('id', messagesId)
-			.maybeSingle();
-		serverConfig = data?.config ?? null;
-	} catch {
-		return;
-	}
-	const current = serverConfig?.runCode;
-	if (typeof current !== 'string' || current === NOTIFY_RUN_CODE) return;
-	if (!RUN_CODE_LEGACY.some((marker) => current.includes(marker))) return;
-
-	try {
-		await supabase
-			.from('meta_tables')
-			.update({ config: { ...serverConfig, runCode: NOTIFY_RUN_CODE } })
-			.eq('id', messagesId);
-		console.log('Восстановлен актуальный код отправки уведомлений (runCode).');
-	} catch {
-		// сервер недоступен — залечим при следующем цикле синхронизации
-	}
-}
-
 // Идемпотентное создание таблиц модуля уведомлений. Вызывается из
 // metadata.ensureSystemTables() — при старте приложения и перед каждым синком.
 export async function ensureNotificationTables(): Promise<void> {
@@ -760,7 +579,6 @@ export async function ensureNotificationTables(): Promise<void> {
 
 	// Порядок важен: у колонок-ссылок должен быть реальный id таблицы-цели.
 	const servicesId = await ensureTable(API_SERVICES_TABLE, 'Сервисы API', 'directory', {});
-	await migrateLegacyNotifyProviders(online);
 	const channelsId = await ensureTable(NOTIFY_CHANNELS_TABLE, 'Каналы отправки', 'directory', {});
 	const messagesId = await ensureTable(NOTIFY_MESSAGES_TABLE, 'Сообщение', 'document', {
 		features: { run: true },
@@ -786,14 +604,8 @@ export async function ensureNotificationTables(): Promise<void> {
 		await reconcileContacts(counterpartiesId, channelsId, online);
 	}
 
-	// ТЧ «Получатели» сообщения: [Контрагент, Канал], legacy-колонка удаляется
+	// ТЧ «Получатели» сообщения: [Контрагент, Канал]
 	await reconcileMessageTabular(messageChannelsId, counterpartiesId, channelsId, online);
-
-	// Лечение ранней (битой) версии seed-кода: в ней await был внутри не-async
-	// стрелочной функции filter(...) — такой код не проходит парсинг. ensureTable
-	// перезаписывает локальный кэш актуальным кодом, но на сервере таблица уже
-	// существует со старой строкой — обновляем её точечно, не трогая ручные правки.
-	await reconcileMessageRunCode(messagesId, online);
 
 	// Офлайн-старт: сиды по умолчанию создаём сразу, чтобы справочники были
 	// доступны без сети. Онлайн-сид выполняется ПОСЛЕ pullDataChanges (см.

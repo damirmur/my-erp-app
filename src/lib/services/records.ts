@@ -18,9 +18,10 @@ export async function physicalDeleteRecords(recordIds: string[]): Promise<void> 
 	const { error: recErr } = await supabase.from('data_records').delete().in('id', ids);
 	if (recErr) throw new Error(`Ошибка удаления записей: ${recErr.message}`);
 
-	await db.transaction('rw', [db.data_records, db.data_lines], async () => {
+	await db.transaction('rw', [db.data_records, db.data_lines, db.data_files], async () => {
 		await db.data_records.bulkDelete(ids);
 		await db.data_lines.where('record_id').anyOf(ids).delete();
+		await db.data_files.where('record_id').anyOf(ids).delete();
 	});
 
 	// Журнал изменений: факт безвозвратного удаления (ссылка на объект уже мертва)

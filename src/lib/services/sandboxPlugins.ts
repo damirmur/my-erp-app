@@ -12,9 +12,12 @@ import type { StoredFile } from '$lib/services/files';
 // недоступен, и код его использующий получит понятную ошибку.
 export function registerSandboxPlugins(): void {
 	// Извлечение текста/строк из PDF — универсальный примитив (не банковский).
+	// Файл может прийти ссылкой на хранилище — разворачиваем перед чтением.
 	registerSandboxHelper('parsePdf', () => async (file: StoredFile) => {
+		const { hydrateFileValue } = await import('$lib/services/files');
+		const hydrated = ((await hydrateFileValue(file)) ?? file) as StoredFile;
 		const m = await import('$lib/services/pdfText');
-		return m.extractPdfText(file);
+		return m.extractPdfText(hydrated);
 	});
 
 	// Импорт банковской выписки (модуль «Банк»): лениво, для уже существующих

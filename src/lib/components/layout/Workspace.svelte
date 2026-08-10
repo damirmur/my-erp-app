@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { replaceState } from '$app/navigation';
 	import { workspace } from '$lib/state/workspace.svelte';
-	import { syncService } from '$lib/services/sync';
+	import { syncService, clearAppStorage } from '$lib/services/sync';
 	import { db } from '$lib/db/indexeddb';
 	import { buildRecordUrl, buildListUrl } from '$lib/services/deeplink';
 	import DynamicList from '../dynamic/DynamicList.svelte';
@@ -39,7 +39,7 @@
 		}
 		if (
 			!confirm(
-				'Полное обновление:\n1. Отправить локальные изменения на сервер\n2. Очистить локальные данные и кэш\n3. Перезагрузить приложение'
+				'Полное обновление:\n1. Отправить локальные изменения на сервер\n2. Очистить локальные данные (IndexedDB), кэш браузера и настройки приложения\n3. Перезагрузить приложение'
 			)
 		)
 			return;
@@ -51,12 +51,13 @@
 			// 2. Очищаем локальный кэш IndexedDB (свежие данные подтянутся при старте)
 			await db.transaction(
 				'rw',
-				[db.meta_tables, db.meta_columns, db.data_records, db.data_lines],
+				[db.meta_tables, db.meta_columns, db.data_records, db.data_lines, db.data_files],
 				async () => {
 					await db.meta_tables.clear();
 					await db.meta_columns.clear();
 					await db.data_records.clear();
 					await db.data_lines.clear();
+					await db.data_files.clear();
 				}
 			);
 
@@ -66,7 +67,11 @@
 				await Promise.all(keys.map((k) => caches.delete(k)));
 			}
 
-			// 4. Жёсткая перезагрузка: новый URL, чтобы страница не взялась из кэша.
+			// 4. Сбрасываем ключи приложения в localStorage (версия сидов, якорь
+			// синка, версия метаданных, настройки меню). Сессию Supabase не трогаем.
+			clearAppStorage();
+
+			// 5. Жёсткая перезагрузка: новый URL, чтобы страница не взялась из кэша.
 			// После загрузки приложение само выполнит полную синхронизацию (см. +page.svelte)
 			const url = new URL(location.href);
 			url.searchParams.set('hard', String(Date.now()));
@@ -125,35 +130,35 @@
 		</div>
 	</div>
 
-	<!-- 2. Контентная область активного окна (Динамический рендерер) -->
+	<!-- 2. Контентная область окон. Все открытые вкладки держим в DOM (keep-alive):
+	     состояние списков/форм сохраняется при переключении — не перечитываем
+	     IndexedDB при каждом переключении, не теряем незаписанные правки. -->
 	<div class="workspace-content">
-		{#if workspace.activeTab}
-			{#if workspace.activeTab.tableId === 'SYSTEM_CONFIUGRATOR_ID'}
-				<ConfiguratorForm
-					tabId={workspace.activeTab.id}
-					tableId={workspace.activeTab.recordId ?? ''}
-				/>
-			{:else if workspace.activeTab.tableId === 'SYSTEM_TYPE_CONFIGURATOR_ID'}
-				<TypeConfiguratorForm
-					tabId={workspace.activeTab.id}
-					typeName={workspace.activeTab.recordId ?? ''}
-				/>
-			{:else if workspace.activeTab.type === 'list'}
-				<DynamicList tableId={workspace.activeTab.tableId} tabId={workspace.activeTab.id} />
-			{:else if workspace.activeTab.type === 'form'}
-				<DynamicForm
-					tableId={workspace.activeTab.tableId}
-					recordId={workspace.activeTab.recordId}
-					tabId={workspace.activeTab.id}
-					focusLineId={workspace.activeTab.focusLineId ?? ''}
-					initialParentId={workspace.activeTab.initialParentId ?? ''}
-				/>
-			{/if}
-		{:else}
+		{#if workspace.tabs.length === 0}
 			<div class="empty-workspace-state">
 				<div class="hero-logo">🛠️ Low-Code «Our life - our rules»</div>
 				<p>Система готова к работе. Настройте её правила под комфортный work-life balance.</p>
 			</div>
+		{:else}
+			{#each workspace.tabs as tab (tab.id)}
+				<div class="tab-pane" style={workspace.activeTabId === tab.id ? '' : 'display: none'}>
+					{#if tab.tableId === 'SYSTEM_CONFIUGRATOR_ID'}
+						<ConfiguratorForm tabId={tab.id} tableId={tab.recordId ?? ''} />
+					{:else if tab.tableId === 'SYSTEM_TYPE_CONFIGURATOR_ID'}
+						<TypeConfiguratorForm tabId={tab.id} typeName={tab.recordId ?? ''} />
+					{:else if tab.type === 'list'}
+						<DynamicList tableId={tab.tableId} tabId={tab.id} />
+					{:else if tab.type === 'form'}
+						<DynamicForm
+							tableId={tab.tableId}
+							recordId={tab.recordId}
+							tabId={tab.id}
+							focusLineId={tab.focusLineId ?? ''}
+							initialParentId={tab.initialParentId ?? ''}
+						/>
+					{/if}
+				</div>
+			{/each}
 		{/if}
 	</div>
 </main>
@@ -289,6 +294,9 @@
 		overflow: auto;
 		position: relative;
 		background-color: #ffffff;
+	}
+	.tab-pane {
+		height: 100%;
 	}
 	.empty-workspace-state {
 		display: flex;

@@ -7,6 +7,7 @@ import { flowLayout } from '$lib/services/flowLayout';
 import { autoFillDocumentFields } from '$lib/services/numbers';
 import { sandboxContext } from '$lib/services/sandbox';
 import { fireTriggers, isTriggerActive } from '$lib/services/triggers';
+import { hydrateFilesInObject, externalizeFilesInObject } from '$lib/services/files';
 
 // Контекст, передаваемый в пользовательский код действия «Выполнить».
 // Доступно из кода: record, records, lines, params, db, supabase, save(), log(),
@@ -39,9 +40,42 @@ export interface RunActionContext {
 // log, link, apiCall, run, flow, input, inputs) доступны в коде как локальные
 // имена без префикса ctx. Список имён берётся динамически из ключей ctx —
 // поэтому зарегистрированные модульные хелперы тоже доступны по имени.
+//
+// Файловые поля в record.data/lines хранятся ссылками { fileId } — перед
+// выполнением кода разворачиваем их в inline (record.data.file.data доступен,
+// как раньше). Изменения кода сохраняются через save() — там inline снова
+// выносится в хранилище.
+async function hydrateContext(ctx: RunActionContext): Promise<RunActionContext> {
+	const out = { ...ctx } as RunActionContext;
+	if (ctx.record) {
+		out.record = { ...ctx.record, data: await hydrateFilesInObject(ctx.record.data ?? {}) };
+	}
+	if (Array.isArray(ctx.records)) {
+		out.records = await Promise.all(
+			ctx.records.map(async (r) => ({ ...r, data: await hydrateFilesInObject(r.data ?? {}) }))
+		);
+	}
+	if (Array.isArray(ctx.lines)) {
+		out.lines = await Promise.all(
+			ctx.lines.map(async (l) => ({ ...l, data: await hydrateFilesInObject(l.data ?? {}) }))
+		);
+	}
+	if (ctx.subLines) {
+		const sub: Record<string, LocalLine[]> = {};
+		for (const [name, lines] of Object.entries(ctx.subLines)) {
+			sub[name] = await Promise.all(
+				lines.map(async (l) => ({ ...l, data: await hydrateFilesInObject(l.data ?? {}) }))
+			);
+		}
+		out.subLines = sub;
+	}
+	return out;
+}
+
 export async function runActionCode(code: string, ctx: RunActionContext): Promise<unknown> {
-	const paramNames = Object.keys(ctx);
-	const values = paramNames.map((k) => ctx[k]);
+	const hydrated = await hydrateContext(ctx);
+	const paramNames = Object.keys(hydrated);
+	const values = paramNames.map((k) => hydrated[k]);
 	const fn = new Function(...paramNames, `return (async () => {\n${code}\n})();`);
 	return await fn(...values);
 }
@@ -337,13 +371,21 @@ export async function saveRecordWithLines(record: LocalRecord, lines?: LocalLine
 	const autoData = await autoFillDocumentFields(record.table_id, record.data ?? {});
 	record = { ...record, data: autoData };
 
+	// Вложения выносим в хранилище data_files — в jsonb остаётся ссылка { fileId }.
+	const data = await externalizeFilesInObject(autoData, record.id);
+	if (lines && lines.length > 0) {
+		for (const line of lines) {
+			line.data = await externalizeFilesInObject(line.data ?? {}, record.id);
+		}
+	}
+
 	// Статус до сохранения — для перехода сценария-триггера (для новых записей null).
 	const prevStatus = (await db.data_records.get(record.id))?.status ?? null;
 
 	await db.transaction('rw', [db.data_records, db.data_lines], async () => {
 		await db.data_records.put({
 			...record,
-			data: toPlain(record.data),
+			data: toPlain(data),
 			is_dirty: 1,
 			updated_at: new Date().toISOString()
 		});

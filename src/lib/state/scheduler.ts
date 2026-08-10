@@ -1,4 +1,3 @@
-import { supabase } from '$lib/db/supabase';
 import { db, type LocalColumn } from '$lib/db/indexeddb';
 import { API_SERVICES_TABLE, NOTIFY_CHANNELS_TABLE } from '$lib/state/notifications';
 import { ensureColumns, ensureTable, findTableIdByName } from '$lib/state/seed';
@@ -182,40 +181,6 @@ function scheduleRecipientColumns(counterpartiesId: string, channelsId: string):
 	];
 }
 
-// Маркеры устаревших seed-версий runCode расписаний (по образцу RUN_CODE_LEGACY
-// модуля уведомлений) — для точечного лечения серверной копии при изменениях.
-const RUN_CODE_LEGACY = ["findTableId('schedules')", 'await run("notify_messages"'];
-
-// Точечное лечение runCode документа «Расписание» на сервере: ensureTable
-// перезаписывает локальный кэш, но существующую серверную строку не трогает.
-async function reconcileScheduleRunCode(schedulesId: string, online: boolean): Promise<void> {
-	if (!online) return;
-	let serverConfig: Record<string, any> | null = null;
-	try {
-		const { data } = await supabase
-			.from('meta_tables')
-			.select('config')
-			.eq('id', schedulesId)
-			.maybeSingle();
-		serverConfig = data?.config ?? null;
-	} catch {
-		return;
-	}
-	const current = serverConfig?.runCode;
-	if (typeof current !== 'string' || current === SCHEDULE_RUN_CODE) return;
-	if (!RUN_CODE_LEGACY.some((marker) => current.includes(marker))) return;
-
-	try {
-		await supabase
-			.from('meta_tables')
-			.update({ config: { ...serverConfig, runCode: SCHEDULE_RUN_CODE } })
-			.eq('id', schedulesId);
-		console.log('Восстановлен актуальный код расписания (runCode).');
-	} catch {
-		// сервер недоступен — залечим при следующем цикле синхронизации
-	}
-}
-
 // Идемпотентное создание таблиц модуля расписаний. Вызывается из
 // metadata.ensureSystemTables() — при старте приложения и перед каждым синком
 // (после ensureNotificationTables, т.к. нужны каталог сервисов и каналы).
@@ -249,6 +214,4 @@ export async function ensureSchedulerTables(): Promise<void> {
 			online
 		);
 	}
-
-	await reconcileScheduleRunCode(schedulesId, online);
 }

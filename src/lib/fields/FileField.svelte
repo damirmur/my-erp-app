@@ -5,6 +5,7 @@
 		blobToBase64,
 		downloadBlob,
 		formatBytes,
+		hydrateFileValue,
 		type StoredFile
 	} from '$lib/services/files';
 
@@ -13,9 +14,27 @@
 	let fileInput = $state<HTMLInputElement | null>(null);
 	let busy = $state(false);
 
-	let current = $derived<StoredFile | null>(
-		value && typeof value === 'object' && value.data ? value : null
-	);
+	// Текущее значение: inline (только что выбранный файл) или развёрнутая из
+	// хранилища ссылка (fileId → содержимое загружается асинхронно).
+	let current = $state<StoredFile | null>(null);
+
+	$effect(() => {
+		const v = value;
+		if (v && typeof v === 'object' && typeof v.data === 'string') {
+			current = v;
+			return;
+		}
+		if (v && typeof v === 'object' && typeof v.fileId === 'string') {
+			let cancelled = false;
+			hydrateFileValue(v).then((h) => {
+				if (!cancelled) current = h ? (h as StoredFile) : null;
+			});
+			return () => {
+				cancelled = true;
+			};
+		}
+		current = null;
+	});
 
 	async function handleSelect(e: Event) {
 		const input = e.target as HTMLInputElement;

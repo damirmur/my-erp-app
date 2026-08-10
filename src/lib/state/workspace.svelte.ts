@@ -115,12 +115,15 @@ class WorkspaceManager {
 					is_dirty: 1,
 					updated_at: now
 				});
-				// Ограничиваем глубину истории (свежие записи выше по opened_at)
-				const all = await db.data_records.where('table_id').equals(historyTable.id).toArray();
-				const sorted = all.sort((a, b) =>
-					String(a.data?.opened_at) < String(b.data?.opened_at) ? 1 : -1
-				);
-				for (const r of sorted.slice(HISTORY_LIMIT)) await db.data_records.delete(r.id);
+				// Ограничиваем глубину истории (свежие записи выше по opened_at).
+				// Сортировка по индексированной updated_at (для истории совпадает
+				// с opened_at) — без скана и сортировки всех полей записей.
+				const all = await db.data_records
+					.where('table_id')
+					.equals(historyTable.id)
+					.sortBy('updated_at');
+				const over = all.slice(0, Math.max(0, all.length - HISTORY_LIMIT));
+				if (over.length > 0) await db.data_records.bulkDelete(over.map((r) => r.id));
 			});
 		} catch (e) {
 			console.warn('Не удалось записать действие в историю:', e);

@@ -1,5 +1,8 @@
 // Хелперы для файловых полей (FILE и ZIP-files).
-// Данные хранятся base64-строкой прямо в jsonb-поле record.data.
+// Содержимое файлов (base64) хранится в отдельном хранилище data_files
+// (Dexie — локально, таблица data_files — на сервере). В record.data.jsonb
+// у файлового поля остаётся только ссылка { name, size, type, fileId }.
+import { db, type LocalFile } from '$lib/db/indexeddb';
 
 export const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 МБ
 
@@ -69,4 +72,176 @@ export function checkFileSize(file: File): string | null {
 export async function fileToStoredFile(file: File): Promise<StoredFile> {
 	const data = await blobToBase64(file);
 	return { name: file.name, size: file.size, type: file.type || 'application/octet-stream', data };
+}
+
+// ---- Ссылки на вложения (data_files) вместо base64 в record.data ----
+
+export interface FileRef {
+	name: string;
+	size: number;
+	type?: string;
+	fileId: string;
+	files?: { name: string; size: number }[];
+}
+
+// Значение файлового поля — ссылка на data_files.
+export function isFileRef(v: unknown): v is FileRef {
+	return !!v && typeof v === 'object' && typeof (v as FileRef).fileId === 'string';
+}
+
+// Значение файлового поля ещё не вынесено в хранилище (inline base64 в data).
+export function isInlineFileValue(v: unknown): v is StoredFile | StoredZip {
+	if (!v || typeof v !== 'object') return false;
+	const obj = v as Record<string, any>;
+	return typeof obj.data === 'string' && obj.data.length > 0 && typeof obj.fileId !== 'string';
+}
+
+// MIME-тип значения файлового поля (у StoredZip его нет — это архив).
+function fileTypeOf(v: StoredFile | StoredZip): string {
+	if (Array.isArray((v as StoredZip).files)) return 'application/zip';
+	return (v as StoredFile).type ?? 'application/octet-stream';
+}
+
+// Размер в байтах (у StoredZip нет size — оцениваем по длине base64).
+function fileSizeOf(v: StoredFile | StoredZip): number {
+	if (typeof (v as StoredFile).size === 'number') return (v as StoredFile).size;
+	return Math.floor(v.data.length * 0.75);
+}
+
+// Ссылка на вынесенный файл (вместо base64 в record.data).
+export function toFileRef(v: StoredFile | StoredZip, fileId: string): FileRef {
+	const ref: FileRef = {
+		name: v.name,
+		size: fileSizeOf(v),
+		type: fileTypeOf(v),
+		fileId
+	};
+	if (Array.isArray((v as StoredZip).files)) ref.files = (v as StoredZip).files;
+	return ref;
+}
+
+// Содержимое вложения из локального хранилища (null — если ещё не скачано).
+export async function getFileContent(fileId: string): Promise<string | null> {
+	if (!fileId) return null;
+	const row = await db.data_files.get(fileId);
+	return row?.content ?? null;
+}
+
+// Развернуть ссылку обратно в inline-значение (для UI и кода действий).
+export async function hydrateFileValue(v: unknown): Promise<StoredFile | StoredZip | null> {
+	if (!isFileRef(v)) return null;
+	const content = await getFileContent(v.fileId);
+	if (content == null) return null;
+	const out: Record<string, any> = {
+		name: v.name,
+		size: v.size,
+		type: v.type ?? 'application/octet-stream',
+		data: content
+	};
+	if (Array.isArray(v.files)) out.files = v.files;
+	return (Array.isArray(v.files) ? out : out) as StoredFile | StoredZip;
+}
+
+// Скопировать объект, заменив ссылки на вложения их содержимым (для кода
+// действий «Выполнить»: record.data.file.data должен быть доступен как раньше).
+export async function hydrateFilesInObject(obj: Record<string, any>): Promise<Record<string, any>> {
+	const out: Record<string, any> = { ...obj };
+	for (const key of Object.keys(out)) {
+		const v = out[key];
+		if (!isFileRef(v)) continue;
+		const hydrated = await hydrateFileValue(v);
+		if (hydrated) out[key] = hydrated;
+	}
+	return out;
+}
+
+// Вынести inline-вложения записи в хранилище data_files. Возвращает копию
+// record.data, где у файловых полей вместо base64 — ссылка { fileId }.
+// Идемпотентно: неизменённые файлы переиспользуют существующий fileId
+// (сверка по содержимому колонки), удалённые — вычищаются из хранилища.
+export async function externalizeFilesInObject(
+	obj: Record<string, any>,
+	recordId: string
+): Promise<Record<string, any>> {
+	const out: Record<string, any> = { ...obj };
+	if (!recordId) return out;
+
+	const existing = await db.data_files.where('record_id').equals(recordId).toArray();
+	const byColumn = new Map(existing.map((f) => [f.column_id, f]));
+	const keptIds = new Set<string>();
+	const toPut: LocalFile[] = [];
+	const now = new Date().toISOString();
+
+	for (const key of Object.keys(out)) {
+		const v = out[key];
+		if (isFileRef(v)) {
+			// Уже ссылка: хранилище должно сохранить содержимое.
+			if (v.fileId && (await db.data_files.get(v.fileId))) keptIds.add(v.fileId);
+			continue;
+		}
+		if (!isInlineFileValue(v)) continue;
+
+		const prev = byColumn.get(key);
+		const fileId = prev && prev.content === v.data ? prev.id : crypto.randomUUID();
+		toPut.push({
+			id: fileId,
+			record_id: recordId,
+			column_id: key,
+			name: v.name,
+			size: fileSizeOf(v),
+			type: fileTypeOf(v),
+			content: v.data,
+			updated_at: now
+		});
+		keptIds.add(fileId);
+		out[key] = toFileRef(v, fileId);
+	}
+
+	if (toPut.length > 0) await db.data_files.bulkPut(toPut);
+	const orphans = existing.filter((f) => !keptIds.has(f.id)).map((f) => f.id);
+	if (orphans.length > 0) await db.data_files.bulkDelete(orphans);
+	return out;
+}
+
+// Клонирование вложений для копии записи: каждому файлу — новый fileId (копия
+// и оригинал независимы). Принимает данные с ref- или inline-значениями,
+// возвращает копию с новыми ссылками на хранилище.
+export async function copyFilesInObject(
+	obj: Record<string, any>,
+	recordId: string
+): Promise<Record<string, any>> {
+	const out: Record<string, any> = { ...obj };
+	for (const key of Object.keys(out)) {
+		const v = out[key];
+		if (isInlineFileValue(v)) {
+			const fileId = crypto.randomUUID();
+			await db.data_files.put({
+				id: fileId,
+				record_id: recordId,
+				column_id: key,
+				name: v.name,
+				size: fileSizeOf(v),
+				type: fileTypeOf(v),
+				content: v.data,
+				updated_at: new Date().toISOString()
+			});
+			out[key] = toFileRef(v, fileId);
+		} else if (isFileRef(v)) {
+			const content = await getFileContent(v.fileId);
+			if (content == null) continue;
+			const fileId = crypto.randomUUID();
+			await db.data_files.put({
+				id: fileId,
+				record_id: recordId,
+				column_id: key,
+				name: v.name,
+				size: v.size,
+				type: v.type ?? 'application/octet-stream',
+				content,
+				updated_at: new Date().toISOString()
+			});
+			out[key] = { ...v, fileId };
+		}
+	}
+	return out;
 }

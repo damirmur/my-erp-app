@@ -4,6 +4,7 @@ import { htmlToBase64, printerService } from '$lib/services/printer';
 import { autoFillDocumentFields, todayIso } from '$lib/services/numbers';
 import { NOTIFY_MESSAGES_TABLE, NOTIFY_MESSAGE_CHANNELS_TABLE } from '$lib/state/notifications';
 import { findTableIdByName } from '$lib/state/seed';
+import { externalizeFilesInObject } from '$lib/services/files';
 
 // Модуль «Доставка документа»: «✉️ Отправить» не шлёт сразу, а создаёт документ
 // «Сообщение» с отрендеренной печатной формой (текст + HTML-вложение) и
@@ -108,13 +109,16 @@ export const deliverService = {
 			}
 		});
 
+		// Вложение — исходник документа (HTML/SVG). Выносим в хранилище data_files.
+		const storedData = await externalizeFilesInObject(data, messageId);
+
 		await db.data_records.put({
 			id: messageId,
 			table_id: messagesTableId,
 			status: 'draft',
 			is_folder: false,
 			parent_id: null,
-			data,
+			data: storedData,
 			is_dirty: 1,
 			updated_at: now
 		});

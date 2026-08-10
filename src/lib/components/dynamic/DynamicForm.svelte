@@ -1,11 +1,5 @@
 <script lang="ts">
-	import {
-		db,
-		type LocalColumn,
-		type LocalTable,
-		type LocalLine,
-		type LocalRecord
-	} from '$lib/db/indexeddb';
+	import { db, type LocalColumn, type LocalTable, type LocalLine } from '$lib/db/indexeddb';
 	import { workspace } from '$lib/state/workspace.svelte';
 	import { printerService } from '$lib/services/printer';
 	import { deliverService } from '$lib/services/deliver';
@@ -15,6 +9,7 @@
 	import { fireTriggers } from '$lib/services/triggers';
 	import { isReadOnly, getEffectiveConfig } from '$lib/table-types';
 	import { fieldRegistry } from '$lib/fields';
+	import { externalizeFilesInObject, copyFilesInObject } from '$lib/services/files';
 	import GroupField from '$lib/fields/GroupField.svelte';
 	import { isValidBirthLocal, defaultBirth } from '$lib/fields/birth';
 	import { selectOptionsFor, loadSelectOptions } from '$lib/services/flowElements';
@@ -33,7 +28,6 @@
 
 	// Иерархия: родительская группа (top-level parent_id) и её исключения при выборе
 	let parentId = $state<string>('');
-	let tableRecords = $state<LocalRecord[]>([]);
 	let forbiddenGroupIds = $state<Set<string>>(new Set());
 
 	let objectSubTables = $state<LocalTable[]>([]);
@@ -197,9 +191,8 @@
 			parentId = initialParentId ?? '';
 		}
 
-		// Все записи таблицы — нужны для расчёта исключений групп (потомки).
-		const allTableRecords = await db.data_records.where('table_id').equals(tableId).toArray();
-		tableRecords = allTableRecords;
+		// Все записи таблицы больше не грузим целиком — для запрещённых групп
+		// используем точечный обход по индексу parent_id (recomputeForbiddenGroups).
 
 		columns.forEach((col) => {
 			if (recordData[col.name] === undefined) {
@@ -235,47 +228,33 @@
 		loading = false;
 	}
 
-	// Множество id, недоступных как «Группа» для записи recordId:
-	//   — сама запись (parent_id не может быть равен самому себе);
-	//   — текущая группа записи (чтобы не выбирать группу, в которой уже лежим);
-	//   — все потомки (кто находится в поддереве записи) — защита от циклов.
-	// Потомки собираются по top-level parent_id записи (единственный источник иерархии).
-	function computeForbiddenGroups(
-		allRecords: LocalRecord[],
-		recordId: string,
-		currentParent: string
-	): Set<string> {
+	// Запрещённые для выбора группы: сама запись, текущая группа и все потомки
+	// записи (защита от циклов). Потомки собираются обходом по индексу parent_id —
+	// без загрузки всех записей таблицы (раньше грузился весь справочник).
+	async function recomputeForbiddenGroups() {
+		if (!tableMeta) return;
 		const forbidden = new Set<string>();
 		forbidden.add(recordId);
-		if (currentParent) forbidden.add(currentParent);
+		if (parentId) forbidden.add(parentId);
 
-		// Потомки recordId: BFS по parent_id, начиная с детей recordId.
-		const children = new Map<string, string[]>();
-		for (const r of allRecords) {
-			const pid = String(r.parent_id ?? '');
-			if (!pid) continue;
-			if (!children.has(pid)) children.set(pid, []);
-			children.get(pid)!.push(r.id);
-		}
 		const queue = [recordId];
 		while (queue.length > 0) {
 			const id = queue.shift()!;
-			for (const child of children.get(id) ?? []) {
-				if (forbidden.has(child)) continue;
-				forbidden.add(child);
-				queue.push(child);
+			const children = await db.data_records.where('parent_id').equals(id).toArray();
+			for (const child of children) {
+				if (forbidden.has(child.id)) continue;
+				forbidden.add(child.id);
+				queue.push(child.id);
 			}
 		}
-		return forbidden;
+		forbiddenGroupIds = forbidden;
 	}
 
-	// Запрещённые для выбора группы пересчитываются при смене «Группы»: включают
-	// саму запись, текущую группу и всех потомков записи (защита от циклов).
+	// Запрещённые для выбора группы пересчитываются при смене «Группы».
 	$effect(() => {
 		parentId;
-		tableRecords;
 		if (!tableMeta) return;
-		forbiddenGroupIds = computeForbiddenGroups(tableRecords, recordId, parentId);
+		void recomputeForbiddenGroups();
 	});
 
 	// Значение последнего периода (актуальное)
@@ -399,6 +378,14 @@
 		const autoData = await autoFillDocumentFields(tableId, cleanData);
 		recordData = { ...recordData, ...autoData };
 
+		// Вложения выносим в хранилище data_files — в jsonb остаётся ссылка { fileId }.
+		const storedData = await externalizeFilesInObject(autoData, recordId);
+		for (const grp of cleanLines) {
+			for (const line of grp.lines) {
+				line.data = await externalizeFilesInObject(line.data ?? {}, recordId);
+			}
+		}
+
 		// Статус ДО сохранения — для перехода триггера (проведение/отмена/удаление
 		// определяются по нему; recordStatus уже равен целевому статусу, т.к.
 		// handleAction выставляет его перед вызовом saveToDb).
@@ -415,7 +402,7 @@
 					status: targetStatus as any,
 					is_folder: false,
 					parent_id: parentId || null,
-					data: { ...autoData, total_amount: totalAmount },
+					data: { ...storedData, total_amount: totalAmount },
 					is_dirty: 1,
 					updated_at: new Date().toISOString()
 				});
@@ -636,6 +623,14 @@
 		});
 		const nextFreeNumber = newRecordData.number ?? '';
 
+		// Вложения копии клонируем в хранилище (по новому id записи).
+		const storedCopy = await copyFilesInObject(newRecordData, newRecordId);
+		for (const grp of cleanLines) {
+			for (const line of grp.lines) {
+				line.data = await copyFilesInObject(line.data ?? {}, newRecordId);
+			}
+		}
+
 		await db.transaction('rw', [db.data_records, db.data_lines], async () => {
 			await db.data_records.put({
 				id: newRecordId,
@@ -643,7 +638,7 @@
 				status: 'draft',
 				is_folder: false,
 				parent_id: null,
-				data: newRecordData,
+				data: storedCopy,
 				is_dirty: 1,
 				updated_at: new Date().toISOString()
 			});

@@ -31,6 +31,12 @@
 	// displayName — наименование этой записи для отображения в закрытом состоянии.
 	let displayName = $state('');
 
+	// Заголовок записи: name, иначе number (документы/выписки без name).
+	function recordTitle(r: LocalRecord | undefined | null): string {
+		const d = r?.data ?? {};
+		return d.name || d.number || '';
+	}
+
 	$effect(() => {
 		if (isOpen || !value) {
 			if (!isOpen) displayName = '';
@@ -42,7 +48,7 @@
 			.then((r) => {
 				if (cancelled) return;
 				// Если записи нет (старые данные хранили имя, а не id) — показываем сырое значение
-				displayName = r?.data?.name ?? String(value);
+				displayName = recordTitle(r) || String(value);
 			})
 			.catch(() => {
 				if (!cancelled) displayName = String(value);
@@ -99,13 +105,13 @@
 		scopeRecords.filter(
 			(r) =>
 				(!filter || filter(r)) &&
-				(r.data.name || '').toLowerCase().includes(searchQuery.toLowerCase())
+				(recordTitle(r) || '').toLowerCase().includes(searchQuery.toLowerCase())
 		)
 	);
 
 	function handleSelect(record: LocalRecord) {
 		value = record.id; // Прямая мутация переменной, разрешенной для $bindable
-		displayName = record.data?.name ?? '';
+		displayName = recordTitle(record);
 		isOpen = false;
 		searchQuery = '';
 
@@ -176,7 +182,7 @@
 			{:else}
 				{#each suggestions as record (record.id)}
 					<button type="button" onclick={() => handleSelect(record)} class="dropdown-item">
-						<span class="item-title">{record.data.name}</span>
+						<span class="item-title">{recordTitle(record)}</span>
 						{#if record.data.sku}
 							<span class="item-meta">Арт: {record.data.sku}</span>
 						{:else if !targetTableId && tableTitles[record.table_id]}

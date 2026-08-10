@@ -160,7 +160,9 @@ async function executeNode(
 			record: scenario,
 			records: [scenario],
 			lines: scenarioLines,
-			params,
+			// Входные параметры сценария доступны коду узла наравне с параметрами
+			// самого узла (params.statements и т.п.), даже если у узла нет входа.
+			params: { ...scenarioParams, ...params },
 			input,
 			inputs,
 			db,

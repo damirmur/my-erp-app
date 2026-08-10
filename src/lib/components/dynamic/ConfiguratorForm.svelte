@@ -5,6 +5,7 @@
 	import { syncService } from '$lib/services/sync';
 	import { fieldTypeList, fieldTypeLabel } from '$lib/fields';
 	import { toNameSlug, translateToName } from '$lib/services/nameAuto';
+	import { clearHierarchy } from '$lib/services/records';
 	import LinkConfig from '$lib/fields/LinkConfig.svelte';
 	import LinelinkConfig from '$lib/fields/LinelinkConfig.svelte';
 	import { liveQuery } from 'dexie';
@@ -412,6 +413,9 @@
 		if (!selectedTableMeta) return;
 		saving = true;
 		try {
+			// Иерархия была включена до сохранения (для детекции отключения ниже)
+			const wasHierarchy = !!getEffectiveConfig(selectedTableMeta).features.hierarchy;
+
 			// Смена типа: подтверждаем заранее и применяем фичи/статусы нового типа,
 			// иначе у таблицы останутся явные переопределения и ничего не поменяется.
 			const typeChanged = canChangeType && selectedType !== selectedTableMeta.type;
@@ -455,7 +459,22 @@
 				editConfig.features = { ...newType.features };
 				editConfig.statusReadOnly = {};
 			}
+			// Отключение иерархии: подтверждаем и очищаем данные — сначала снимаем
+			// группы (parent_id) со всех записей, затем удаляем все записи-папки.
+			const hierarchyOff = wasHierarchy && !editConfig.features.hierarchy;
+			if (
+				hierarchyOff &&
+				!confirm(
+					'Иерархия будет отключена: у всех записей очистится группа, ' +
+						'а все папки (группы) будут удалены. Продолжить?'
+				)
+			) {
+				return;
+			}
 			await metadata.updateTableConfig(selectedTableId, editConfig);
+			if (hierarchyOff) {
+				await clearHierarchy(selectedTableId);
+			}
 			if (typeChanged && selectedType) {
 				const newType = getTableType(selectedType);
 				const ok = await metadata.updateTableType(selectedTableId, selectedType);

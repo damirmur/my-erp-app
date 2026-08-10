@@ -95,7 +95,7 @@ export function parseRuNumber(s: unknown): number | null {
 }
 
 // Сумма операции: явный «+» — приход (положительная), явный «−» — расход,
-// без знака — расход по умолчанию (у Сбера приход помечается «+»).
+// без знака — расход по умолчанию (в выписках приход обычно помечается «+»).
 export function parseRuAmount(s: unknown): number | null {
 	const t = clean(s);
 	if (!t) return null;

@@ -2,7 +2,8 @@
 	import { db, type LocalRecord, type LocalTable } from '$lib/db/indexeddb';
 	import { workspace } from '$lib/state/workspace.svelte';
 	import { metadata } from '$lib/state/metadata';
-	import { syncService } from '$lib/services/sync';
+	import { syncService, clearAppStorage } from '$lib/services/sync';
+	import { exportProject, importProject, parseBackupFile, downloadBackup } from '$lib/services/backup';
 	import { liveQuery } from 'dexie';
 	import { tableTypeList, deleteTableTypeFromDB, createTableTypeFromBase } from '$lib/table-types';
 	import { translit } from '$lib/services/nameAuto';
@@ -541,6 +542,91 @@
 	function autofocusInput(node: HTMLInputElement) {
 		node.focus();
 	}
+
+	// ---- Резервная копия проекта (выгрузка/загрузка JSON) ----
+	// Выгрузка читает все 6 таблиц Supabase (метаданные + данные + вложения),
+	// загрузка заменяет данные проекта файлом выгрузки и перезапускает приложение.
+	let backupIncludeSystem = $state(true);
+	let backupBusy = $state(false);
+	let backupFileInput = $state<HTMLInputElement | null>(null);
+
+	async function handleExportProject() {
+		if (backupBusy) return;
+		backupBusy = true;
+		try {
+			const backup = await exportProject(backupIncludeSystem);
+			downloadBackup(backup);
+			const total =
+				backup.metaTables.length +
+				backup.metaColumns.length +
+				backup.dataRecords.length +
+				backup.dataLines.length +
+				backup.dataFiles.length;
+			alert(
+				`Выгрузка готова: ${backup.metaTables.length} таблиц, ${backup.metaColumns.length} реквизитов, ` +
+					`${backup.dataRecords.length} записей, ${backup.dataLines.length} строк ТЧ, ${backup.dataFiles.length} вложений.`
+			);
+		} catch (e: any) {
+			alert(`Ошибка выгрузки: ${e?.message ?? e}`);
+		} finally {
+			backupBusy = false;
+		}
+	}
+
+	function handlePickBackupFile() {
+		backupFileInput?.click();
+	}
+
+	async function handleBackupFileChange(e: Event) {
+		const input = e.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		input.value = '';
+		if (!file) return;
+		if (backupBusy) return;
+		backupBusy = true;
+		try {
+			const backup = await parseBackupFile(file);
+			if (
+				!confirm(
+					'Загрузить файл выгрузки в этот проект?\n' +
+						'Все текущие данные (метаданные, записи, вложения) будут заменены содержимым файла.\n' +
+						'После загрузки приложение перезапустится.'
+				)
+			)
+				return;
+			const report = await importProject(backup);
+
+			// Сбрасываем локальный кэш, чтобы после перезапуска всё скачалось из импортированных данных
+			await db.transaction(
+				'rw',
+				[db.meta_tables, db.meta_columns, db.data_records, db.data_lines, db.data_files],
+				async () => {
+					await db.meta_tables.clear();
+					await db.meta_columns.clear();
+					await db.data_records.clear();
+					await db.data_lines.clear();
+					await db.data_files.clear();
+				}
+			);
+			clearAppStorage();
+
+			alert(
+				`Импорт завершён: ${report.metaTables} таблиц, ${report.metaColumns} реквизитов, ` +
+					`${report.dataRecords} записей, ${report.dataLines} строк ТЧ, ${report.dataFiles} вложений.\n` +
+					'Перезапускаем приложение…'
+			);
+
+			// Жёсткая перезагрузка: новый URL, чтобы страница не взялась из кэша.
+			// После загрузки приложение само выполнит полную синхронизацию (см. +page.svelte)
+			const url = new URL(location.href);
+			url.searchParams.set('imported', String(Date.now()));
+			location.replace(url.toString());
+		} catch (e: any) {
+			alert(`Ошибка импорта: ${e?.message ?? e}`);
+		} finally {
+			backupBusy = false;
+		}
+	}
 </script>
 
 {#if !workspace.sidebarCollapsed}
@@ -746,6 +832,47 @@
 							<div class="navorder-hint">
 								Используется в конфигураторе при вводе синонима: name подставляется переводом (или
 								транслитерацией, если сервис/интернет недоступны).
+							</div>
+						</div>
+					</div>
+
+					<div class="navorder-section">
+						<div class="group-header-row">
+							<span class="group-title">💾 Резервная копия</span>
+						</div>
+						<div class="translate-config">
+							<label class="translate-label">
+								<span class="backup-check">
+									<input type="checkbox" bind:checked={backupIncludeSystem} />
+									Включить системные таблицы (сценарии, печатные формы, сервисы, настройки)
+								</span>
+							</label>
+							<button
+								onclick={handleExportProject}
+								disabled={backupBusy}
+								class="type-btn"
+								title="Выгрузить структуру и данные проекта в JSON-файл"
+							>
+								{backupBusy ? '⏳…' : '📤 Выгрузить проект'}
+							</button>
+							<button
+								onclick={handlePickBackupFile}
+								disabled={backupBusy}
+								class="type-btn"
+								title="Заменить данные проекта содержимым JSON-файла"
+							>
+								📥 Загрузить проект…
+							</button>
+							<input
+								type="file"
+								accept="application/json,.json"
+								class="hidden"
+								bind:this={backupFileInput}
+								onchange={handleBackupFileChange}
+							/>
+							<div class="navorder-hint">
+								Выгрузка читает данные с сервера. Загрузка заменяет все данные текущего проекта
+								и перезапускает приложение.
 							</div>
 						</div>
 					</div>
@@ -1107,6 +1234,18 @@
 		font-size: 0.68rem;
 		color: #9ca3af;
 		line-height: 1.3;
+	}
+	.backup-check {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		font-size: 0.72rem;
+		font-weight: 500;
+		color: #475569;
+		cursor: pointer;
+	}
+	.hidden {
+		display: none;
 	}
 	.create-type-form {
 		display: flex;

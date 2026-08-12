@@ -471,6 +471,23 @@ class MetadataManager {
 		return tableId;
 	}
 
+	// Переключение видимости таблицы в основном режиме (config.hiddenInMain) из
+	// вкладки «Интерфейс». Объединяем с текущим конфигом, чтобы не потерять
+	// остальные настройки таблицы, и обновляем локальный кэш.
+	async setTableHiddenInMain(tableId: string, hidden: boolean): Promise<boolean> {
+		const table = await db.meta_tables.get(tableId);
+		if (!table) return false;
+		const config = { ...(table.config ?? {}), hiddenInMain: hidden };
+		const { error } = await supabase.from('meta_tables').update({ config }).eq('id', tableId);
+		if (error) {
+			alert(`Ошибка сохранения видимости: ${error.message}`);
+			return false;
+		}
+		if (table) await db.meta_tables.put({ ...table, config });
+		await bumpMetaVersion();
+		return true;
+	}
+
 	// Смена типа таблицы: обновляем и на сервере, и в локальном кэше
 	// (иначе изменение затёр бы следующий pullMetadata).
 	async updateTableType(tableId: string, type: string): Promise<boolean> {

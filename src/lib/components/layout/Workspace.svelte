@@ -8,6 +8,9 @@
 	import DynamicForm from '../dynamic/DynamicForm.svelte';
 	import ConfiguratorForm from '../dynamic/ConfiguratorForm.svelte';
 	import TypeConfiguratorForm from '../dynamic/TypeConfiguratorForm.svelte';
+	import InterfaceConfigurator from '../dynamic/InterfaceConfigurator.svelte';
+	import InfoBaseConfigurator from '../dynamic/InfoBaseConfigurator.svelte';
+	import TypesSectionForm from '../dynamic/TypesSectionForm.svelte';
 
 	let syncing = $state(false);
 
@@ -23,7 +26,10 @@
 			tab.type === 'form' &&
 			tab.recordId &&
 			tab.tableId !== 'SYSTEM_CONFIUGRATOR_ID' &&
-			tab.tableId !== 'SYSTEM_TYPE_CONFIGURATOR_ID'
+			tab.tableId !== 'SYSTEM_TYPE_CONFIGURATOR_ID' &&
+			tab.tableId !== 'SYSTEM_INTERFACE_CONFIGURATOR_ID' &&
+			tab.tableId !== 'SYSTEM_INFOBASE_CONFIGURATOR_ID' &&
+			tab.tableId !== 'SYSTEM_TYPES_SECTION_ID'
 		) {
 			replaceState(buildRecordUrl(tab.recordId), {});
 		}
@@ -146,6 +152,12 @@
 						<ConfiguratorForm tabId={tab.id} tableId={tab.recordId ?? ''} />
 					{:else if tab.tableId === 'SYSTEM_TYPE_CONFIGURATOR_ID'}
 						<TypeConfiguratorForm tabId={tab.id} typeName={tab.recordId ?? ''} />
+					{:else if tab.tableId === 'SYSTEM_INTERFACE_CONFIGURATOR_ID'}
+						<InterfaceConfigurator />
+					{:else if tab.tableId === 'SYSTEM_INFOBASE_CONFIGURATOR_ID'}
+						<InfoBaseConfigurator />
+					{:else if tab.tableId === 'SYSTEM_TYPES_SECTION_ID'}
+						<TypesSectionForm />
 					{:else if tab.type === 'list'}
 						<DynamicList tableId={tab.tableId} tabId={tab.id} />
 					{:else if tab.type === 'form'}

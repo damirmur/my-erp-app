@@ -1,21 +1,12 @@
 <script lang="ts">
-	import { db, type LocalRecord, type LocalTable } from '$lib/db/indexeddb';
+	import { db, type LocalTable } from '$lib/db/indexeddb';
 	import { workspace } from '$lib/state/workspace.svelte';
 	import { metadata } from '$lib/state/metadata';
-	import { syncService, clearAppStorage } from '$lib/services/sync';
-	import { exportProject, importProject, parseBackupFile, downloadBackup } from '$lib/services/backup';
+	import { syncService } from '$lib/services/sync';
 	import { liveQuery } from 'dexie';
-	import { tableTypeList, deleteTableTypeFromDB, createTableTypeFromBase } from '$lib/table-types';
-	import { translit } from '$lib/services/nameAuto';
+	import { tableTypeList } from '$lib/table-types';
 	import { buildListUrl, fullUrlFor } from '$lib/services/deeplink';
-	import {
-		APP_SETTINGS_TABLE,
-		NAV_ORDER_KEY,
-		TRANSLATE_SERVICE_KEY,
-		clearNavOrder as resetPersistedNavOrder,
-		saveNavOrder as persistNavOrder,
-		saveTranslateConfig as persistTranslateConfig
-	} from '$lib/state/settings';
+	import { APP_SETTINGS_TABLE, NAV_ORDER_KEY } from '$lib/state/settings';
 
 	// Порядок встроенных групп в сайдбаре; кастомные типы идут после
 	const preferredTypeOrder = ['directory', 'document', 'register', 'constant', 'flow', 'system'];
@@ -61,15 +52,6 @@
 		});
 
 		return () => subscription.unsubscribe();
-	});
-
-	// Таблицы, сгруппированные по типу
-	let tablesByType = $derived.by(() => {
-		const map: Record<string, LocalTable[]> = {};
-		tables.forEach((table) => {
-			(map[table.type] ??= []).push(table);
-		});
-		return map;
 	});
 
 	// Таблица скрыта из основного режима, если в её config выставлен флаг hiddenInMain
@@ -203,8 +185,6 @@
 		return () => subscription.unsubscribe();
 	});
 
-	let tablesById = $derived(new Map(tables.map((t) => [t.id, t])));
-
 	// Порядок групп: настроенные типы — в заданном порядке, остальные — после них
 	// в стандартном порядке (preferredTypeOrder, кастомные — по алфавиту).
 	let orderedTypeList = $derived.by(() => {
@@ -236,147 +216,6 @@
 			.filter((t) => !order.includes(t.id))
 			.sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''));
 		return [...ordered, ...rest];
-	}
-
-	// Редактирование порядка в конструкторе: правки копятся в черновиках,
-	// «Сохранить» пишет их в app_settings и запускает синк.
-	let editingNavOrder = $state(false);
-	let draftTypeOrder = $state<string[]>([]);
-	let draftTableOrder = $state<Record<string, string[]>>({});
-
-	function toggleEditNavOrder() {
-		if (editingNavOrder) {
-			cancelNavOrder();
-			return;
-		}
-		draftTypeOrder = orderedTypeList.map((t) => t.type);
-		draftTableOrder = {};
-		for (const t of orderedTypeList) {
-			const configured = new Set(navOrder.tableOrder[t.type] ?? []);
-			const ordered = (navOrder.tableOrder[t.type] ?? []).filter((id) => tablesById.has(id));
-			const rest = (mainModeTablesByType[t.type] ?? [])
-				.filter((tbl) => !configured.has(tbl.id))
-				.map((tbl) => tbl.id);
-			draftTableOrder[t.type] = [...ordered, ...rest];
-		}
-		editingNavOrder = true;
-	}
-
-	function moveType(index: number, dir: -1 | 1) {
-		const j = index + dir;
-		if (j < 0 || j >= draftTypeOrder.length) return;
-		const arr = [...draftTypeOrder];
-		[arr[index], arr[j]] = [arr[j], arr[index]];
-		draftTypeOrder = arr;
-	}
-
-	function moveTable(type: string, index: number, dir: -1 | 1) {
-		const current = draftTableOrder[type] ?? [];
-		const j = index + dir;
-		if (j < 0 || j >= current.length) return;
-		const arr = [...current];
-		[arr[index], arr[j]] = [arr[j], arr[index]];
-		draftTableOrder = { ...draftTableOrder, [type]: arr };
-	}
-
-	async function saveNavOrder() {
-		try {
-			await persistNavOrder({ typeOrder: draftTypeOrder, tableOrder: draftTableOrder });
-			editingNavOrder = false;
-			await syncService.runFullSync();
-		} catch (e: any) {
-			alert(`Ошибка сохранения порядка меню: ${e?.message ?? e}`);
-		}
-	}
-
-	async function resetNavOrder() {
-		if (!confirm('Сбросить порядок меню к стандартному?')) return;
-		await resetPersistedNavOrder();
-		editingNavOrder = false;
-		draftTypeOrder = [];
-		draftTableOrder = {};
-		await syncService.runFullSync();
-	}
-
-	function cancelNavOrder() {
-		editingNavOrder = false;
-		draftTypeOrder = [];
-		draftTableOrder = {};
-	}
-
-	// ---- Настройка «Сервис перевода» (автоперевод имён полей из синонима) ----
-	// Выбор сервиса-переводчика из каталога «Сервисы API» + языки (пусто = по
-	// умолчанию: источник — язык браузера, цель — en). Конфиг живёт в app_settings
-	// (ключ translate_service) и используется конфигуратором через nameAuto.
-	let translateServices = $state<LocalRecord[]>([]);
-	let translateConfig = $state<{ serviceId: string; sourceLang: string; targetLang: string }>({
-		serviceId: '',
-		sourceLang: '',
-		targetLang: ''
-	});
-
-	$effect(() => {
-		const observable = liveQuery(async () => {
-			const table = await db.meta_tables.where('name').equals('api_services').first();
-			if (!table) return [];
-			return await db.data_records.where('table_id').equals(table.id).toArray();
-		});
-		const subscription = observable.subscribe({
-			next: (records) => {
-				translateServices = records;
-			},
-			error: (err) => console.error('Ошибка чтения сервисов API:', err)
-		});
-		return () => subscription.unsubscribe();
-	});
-
-	$effect(() => {
-		const observable = liveQuery(async () => {
-			const table = await db.meta_tables.where('name').equals(APP_SETTINGS_TABLE).first();
-			if (!table) return null;
-			const rows = await db.data_records.where('table_id').equals(table.id).toArray();
-			return rows.find((r) => r.data?.key === TRANSLATE_SERVICE_KEY) ?? null;
-		});
-		const subscription = observable.subscribe({
-			next: (rec) => {
-				const d = rec?.data ?? {};
-				translateConfig = {
-					serviceId: typeof d.serviceId === 'string' ? d.serviceId : '',
-					sourceLang: typeof d.sourceLang === 'string' ? d.sourceLang : '',
-					targetLang: typeof d.targetLang === 'string' ? d.targetLang : ''
-				};
-			},
-			error: (err) => console.error('Ошибка чтения настроек перевода:', err)
-		});
-		return () => subscription.unsubscribe();
-	});
-
-	async function handleTranslateServiceChange(e: Event) {
-		translateConfig = {
-			...translateConfig,
-			serviceId: (e.currentTarget as HTMLSelectElement).value
-		};
-		try {
-			await persistTranslateConfig(translateConfig);
-		} catch (err: any) {
-			alert(`Ошибка сохранения настроек перевода: ${err?.message ?? err}`);
-		}
-	}
-
-	function handleTranslateSourceChange(e: Event) {
-		translateConfig = {
-			...translateConfig,
-			sourceLang: (e.currentTarget as HTMLInputElement).value.trim()
-		};
-		persistTranslateConfig(translateConfig).catch(() => {});
-	}
-
-	function handleTranslateTargetChange(e: Event) {
-		translateConfig = {
-			...translateConfig,
-			targetLang: (e.currentTarget as HTMLInputElement).value.trim()
-		};
-		persistTranslateConfig(translateConfig).catch(() => {});
 	}
 
 	// Раскрытые строки дерева таблиц (в конструкторе)
@@ -445,79 +284,6 @@
 		}
 	}
 
-	// ---- Типы таблиц: создание и удаление ----
-	let creatingType = $state(false);
-	let newTypeLabel = $state('');
-	let newTypeName = $state('');
-	let newTypeBase = $state('directory');
-
-	async function handleCreateType() {
-		const label = newTypeLabel.trim();
-		if (!label) return;
-		const name = newTypeName.trim() || translit(label);
-		try {
-			await createTableTypeFromBase(newTypeBase, name, label);
-		} catch (e: any) {
-			alert(`Ошибка создания типа: ${e?.message ?? e}`);
-			return;
-		}
-		creatingType = false;
-		newTypeLabel = '';
-		newTypeName = '';
-		newTypeBase = 'directory';
-	}
-
-	function handleTypeKeydown(e: KeyboardEvent) {
-		if (e.key === 'Enter') {
-			e.preventDefault();
-			handleCreateType();
-		} else if (e.key === 'Escape') {
-			creatingType = false;
-			newTypeLabel = '';
-			newTypeName = '';
-		}
-	}
-
-	async function handleDeleteType(typeName: string, typeLabel: string) {
-		const tables = tablesByType[typeName] ?? [];
-		if (tables.length > 0) {
-			// Разрешаем удаление, только если у типа нет таблиц с данными.
-			// Пустые таблицы (ошибочно созданные) удаляем вместе с типом.
-			const withData: LocalTable[] = [];
-			const empty: LocalTable[] = [];
-			for (const t of tables) {
-				const n = await db.data_records.where('table_id').equals(t.id).count();
-				(n > 0 ? withData : empty).push(t);
-			}
-			if (withData.length > 0) {
-				alert(
-					`Нельзя удалить тип "${typeLabel}": таблица(ы) «${withData
-						.map((t) => t.title)
-						.join('», «')}» содержат данные. Удалите данные или смените их тип.`
-				);
-				return;
-			}
-			if (
-				!confirm(
-					`Тип "${typeLabel}" содержит пустые таблицы: «${empty
-						.map((t) => t.title)
-						.join('», «')}». Удалить их вместе с типом?`
-				)
-			)
-				return;
-			for (const t of empty) {
-				await metadata.deleteTableCascade(t.id);
-			}
-		}
-		if (!confirm(`Удалить тип "${typeLabel}" (${typeName})?`)) return;
-		try {
-			await deleteTableTypeFromDB(typeName);
-			await syncService.runFullSync();
-		} catch (e: any) {
-			alert(`Ошибка удаления типа: ${e?.message ?? e}`);
-		}
-	}
-
 	// Удаление таблицы (каскадно: подтаблицы + реквизиты)
 	async function handleDeleteTable(id: string, title: string) {
 		const subs = subTablesByParent.get(id) ?? [];
@@ -541,91 +307,6 @@
 	// Фокус на поле создания таблицы при появлении
 	function autofocusInput(node: HTMLInputElement) {
 		node.focus();
-	}
-
-	// ---- Резервная копия проекта (выгрузка/загрузка JSON) ----
-	// Выгрузка читает все 6 таблиц Supabase (метаданные + данные + вложения),
-	// загрузка заменяет данные проекта файлом выгрузки и перезапускает приложение.
-	let backupIncludeSystem = $state(true);
-	let backupBusy = $state(false);
-	let backupFileInput = $state<HTMLInputElement | null>(null);
-
-	async function handleExportProject() {
-		if (backupBusy) return;
-		backupBusy = true;
-		try {
-			const backup = await exportProject(backupIncludeSystem);
-			downloadBackup(backup);
-			const total =
-				backup.metaTables.length +
-				backup.metaColumns.length +
-				backup.dataRecords.length +
-				backup.dataLines.length +
-				backup.dataFiles.length;
-			alert(
-				`Выгрузка готова: ${backup.metaTables.length} таблиц, ${backup.metaColumns.length} реквизитов, ` +
-					`${backup.dataRecords.length} записей, ${backup.dataLines.length} строк ТЧ, ${backup.dataFiles.length} вложений.`
-			);
-		} catch (e: any) {
-			alert(`Ошибка выгрузки: ${e?.message ?? e}`);
-		} finally {
-			backupBusy = false;
-		}
-	}
-
-	function handlePickBackupFile() {
-		backupFileInput?.click();
-	}
-
-	async function handleBackupFileChange(e: Event) {
-		const input = e.currentTarget as HTMLInputElement;
-		const file = input.files?.[0];
-		input.value = '';
-		if (!file) return;
-		if (backupBusy) return;
-		backupBusy = true;
-		try {
-			const backup = await parseBackupFile(file);
-			if (
-				!confirm(
-					'Загрузить файл выгрузки в этот проект?\n' +
-						'Все текущие данные (метаданные, записи, вложения) будут заменены содержимым файла.\n' +
-						'После загрузки приложение перезапустится.'
-				)
-			)
-				return;
-			const report = await importProject(backup);
-
-			// Сбрасываем локальный кэш, чтобы после перезапуска всё скачалось из импортированных данных
-			await db.transaction(
-				'rw',
-				[db.meta_tables, db.meta_columns, db.data_records, db.data_lines, db.data_files],
-				async () => {
-					await db.meta_tables.clear();
-					await db.meta_columns.clear();
-					await db.data_records.clear();
-					await db.data_lines.clear();
-					await db.data_files.clear();
-				}
-			);
-			clearAppStorage();
-
-			alert(
-				`Импорт завершён: ${report.metaTables} таблиц, ${report.metaColumns} реквизитов, ` +
-					`${report.dataRecords} записей, ${report.dataLines} строк ТЧ, ${report.dataFiles} вложений.\n` +
-					'Перезапускаем приложение…'
-			);
-
-			// Жёсткая перезагрузка: новый URL, чтобы страница не взялась из кэша.
-			// После загрузки приложение само выполнит полную синхронизацию (см. +page.svelte)
-			const url = new URL(location.href);
-			url.searchParams.set('imported', String(Date.now()));
-			location.replace(url.toString());
-		} catch (e: any) {
-			alert(`Ошибка импорта: ${e?.message ?? e}`);
-		} finally {
-			backupBusy = false;
-		}
 	}
 </script>
 
@@ -717,239 +398,32 @@
 				{#if workspace.mode === 'constructor'}
 					<div class="navorder-section">
 						<div class="group-header-row">
-							<span class="group-title">🔀 Порядок меню (основной режим)</span>
-							{#if !editingNavOrder}
-								<button
-									class="group-add-btn"
-									onclick={toggleEditNavOrder}
-									title="Настроить порядок типов и таблиц"
-								>
-									✎
-								</button>
-							{/if}
+							<span class="group-title">⚙️ Настройки</span>
 						</div>
-
-						{#if editingNavOrder}
-							{#each draftTypeOrder as typeName, tIndex}
-								{@const typeDef = orderedTypeList.find((t) => t.type === typeName)}
-								{@const tablesInType = draftTableOrder[typeName] ?? []}
-								{#if typeDef}
-									<div class="navorder-type-row">
-										<div class="navorder-type-title">
-											<span class="navorder-group-title"
-												>{groupTitle(typeDef.type, typeDef.label)}</span
-											>
-											<div class="navorder-move">
-												<button
-													class="navorder-arrow"
-													onclick={() => moveType(tIndex, -1)}
-													disabled={tIndex === 0}
-													title="Группу выше">▲</button
-												>
-												<button
-													class="navorder-arrow"
-													onclick={() => moveType(tIndex, 1)}
-													disabled={tIndex === draftTypeOrder.length - 1}
-													title="Группу ниже">▼</button
-												>
-											</div>
-										</div>
-										<ul class="navorder-tables">
-											{#each tablesInType as tableId, tIdx}
-												{@const table = tablesById.get(tableId)}
-												{#if table}
-													<li class="navorder-table-row">
-														<span class="navorder-table-title">{table.title}</span>
-														<div class="navorder-move">
-															<button
-																class="navorder-arrow"
-																onclick={() => moveTable(typeName, tIdx, -1)}
-																disabled={tIdx === 0}
-																title="Выше">▲</button
-															>
-															<button
-																class="navorder-arrow"
-																onclick={() => moveTable(typeName, tIdx, 1)}
-																disabled={tIdx === tablesInType.length - 1}
-																title="Ниже">▼</button
-															>
-														</div>
-													</li>
-												{/if}
-											{/each}
-										</ul>
-									</div>
-								{/if}
-							{/each}
-							<div class="navorder-actions">
-								<button onclick={saveNavOrder} class="type-btn type-btn-primary">Сохранить</button>
-								<button onclick={resetNavOrder} class="type-btn">Сброс</button>
-								<button onclick={cancelNavOrder} class="type-btn">Отмена</button>
-							</div>
-						{/if}
-					</div>
-
-					<div class="navorder-section">
-						<div class="group-header-row">
-							<span class="group-title">🌐 Сервис перевода</span>
-						</div>
-						<div class="translate-config">
-							<label class="translate-label">
-								Переводчик (синоним → имя поля)
-								<select
-									bind:value={translateConfig.serviceId}
-									onchange={handleTranslateServiceChange}
-									class="translate-select"
-								>
-									<option value="">— автоматически (astro3d переводчик) —</option>
-									{#each translateServices as svc}
-										<option value={svc.id}>{svc.data?.name || 'Сервис'}</option>
-									{/each}
-								</select>
-							</label>
-							<div class="translate-langs">
-								<label class="translate-label">
-									Язык синонима
-									<input
-										type="text"
-										bind:value={translateConfig.sourceLang}
-										oninput={handleTranslateSourceChange}
-										placeholder="напр. ru (пусто = язык браузера)"
-										class="translate-input"
-									/>
-								</label>
-								<label class="translate-label">
-									Язык имени
-									<input
-										type="text"
-										bind:value={translateConfig.targetLang}
-										oninput={handleTranslateTargetChange}
-										placeholder="напр. en"
-										class="translate-input"
-									/>
-								</label>
-							</div>
-							<div class="navorder-hint">
-								Используется в конфигураторе при вводе синонима: name подставляется переводом (или
-								транслитерацией, если сервис/интернет недоступны).
-							</div>
-						</div>
-					</div>
-
-					<div class="navorder-section">
-						<div class="group-header-row">
-							<span class="group-title">💾 Резервная копия</span>
-						</div>
-						<div class="translate-config">
-							<label class="translate-label">
-								<span class="backup-check">
-									<input type="checkbox" bind:checked={backupIncludeSystem} />
-									Включить системные таблицы (сценарии, печатные формы, сервисы, настройки)
-								</span>
-							</label>
-							<button
-								onclick={handleExportProject}
-								disabled={backupBusy}
-								class="type-btn"
-								title="Выгрузить структуру и данные проекта в JSON-файл"
-							>
-								{backupBusy ? '⏳…' : '📤 Выгрузить проект'}
-							</button>
-							<button
-								onclick={handlePickBackupFile}
-								disabled={backupBusy}
-								class="type-btn"
-								title="Заменить данные проекта содержимым JSON-файла"
-							>
-								📥 Загрузить проект…
-							</button>
-							<input
-								type="file"
-								accept="application/json,.json"
-								class="hidden"
-								bind:this={backupFileInput}
-								onchange={handleBackupFileChange}
-							/>
-							<div class="navorder-hint">
-								Выгрузка читает данные с сервера. Загрузка заменяет все данные текущего проекта
-								и перезапускает приложение.
-							</div>
-						</div>
-					</div>
-
-					<div class="types-section">
-						<div class="group-header-row">
-							<span class="group-title">🗂 Типы таблиц</span>
-							<button
-								class="group-add-btn"
-								class:active={creatingType}
-								onclick={() => (creatingType = !creatingType)}
-								title="Добавить тип от базового"
-							>
-								＋
-							</button>
-						</div>
-
-						{#if creatingType}
-							<div class="create-type-form">
-								<input
-									type="text"
-									bind:value={newTypeLabel}
-									onkeydown={handleTypeKeydown}
-									placeholder="Синоним (например, Отчёт)"
-									class="create-table-input"
-									use:autofocusInput
-								/>
-								<input
-									type="text"
-									bind:value={newTypeName}
-									onkeydown={handleTypeKeydown}
-									placeholder="Имя (лат.), напр. report"
-									class="create-table-input"
-								/>
-								<select bind:value={newTypeBase} class="create-table-input">
-									{#each typeList as t}
-										{#if t.type !== 'tabular'}
-											<option value={t.type}>{t.label} ({t.type})</option>
-										{/if}
-									{/each}
-								</select>
-								<div class="create-type-actions">
-									<button onclick={handleCreateType} class="type-btn type-btn-primary"
-										>Создать тип</button
-									>
-									<button
-										onclick={() => {
-											creatingType = false;
-											newTypeLabel = '';
-											newTypeName = '';
-										}}
-										class="type-btn">Отмена</button
-									>
-								</div>
-							</div>
-						{/if}
-
-						<ul>
-							{#each typeList as t}
-								<li class="type-row">
-									<span class="type-row-label">{groupTitle(t.type, t.label)}</span>
-									<span class="nav-item-code">{t.type}</span>
-									<span class="type-count">{tablesByType[t.type]?.length ?? 0}</span>
-									<button
-										class="row-edit-btn"
-										onclick={() =>
-											workspace.openTypeConfigurator(t.type, groupTitle(t.type, t.label))}
-										title="Предустановки типа">✎</button
-									>
-									<button
-										class="row-del-btn"
-										onclick={() => handleDeleteType(t.type, t.label)}
-										title="Удалить тип">✕</button
-									>
-								</li>
-							{/each}
-						</ul>
+						<button
+							class="menu-command-btn"
+							class:active={workspace.activeTab?.tableId === 'SYSTEM_INTERFACE_CONFIGURATOR_ID'}
+							onclick={() => workspace.openInterfaceConfigurator()}
+							title="Порядок меню, видимость таблиц, сервис перевода"
+						>
+							🖥 Интерфейс
+						</button>
+						<button
+							class="menu-command-btn"
+							class:active={workspace.activeTab?.tableId === 'SYSTEM_INFOBASE_CONFIGURATOR_ID'}
+							onclick={() => workspace.openInfoBaseConfigurator()}
+							title="Выгрузка и загрузка проекта (резервная копия)"
+						>
+							💾 Работа с информационной базой
+						</button>
+						<button
+							class="menu-command-btn"
+							class:active={workspace.activeTab?.tableId === 'SYSTEM_TYPES_SECTION_ID'}
+							onclick={() => workspace.openTypesSection()}
+							title="Список, создание и удаление типов таблиц"
+						>
+							🗂 Работа с типами таблиц
+						</button>
 					</div>
 				{/if}
 
@@ -1119,143 +593,8 @@
 		overflow-y: auto;
 		flex: 1;
 	}
-	.types-section {
-		margin-bottom: 1.25rem;
-		padding-bottom: 0.75rem;
-		border-bottom: 1px solid #e5e7eb;
-	}
-	.navorder-section {
-		margin-bottom: 1.25rem;
-		padding-bottom: 0.75rem;
-		border-bottom: 1px solid #e5e7eb;
-	}
-	.navorder-type-row {
-		margin-bottom: 0.5rem;
-	}
-	.navorder-type-title {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 4px;
-		padding: 2px 0.25rem;
-	}
-	.navorder-group-title {
-		font-size: 0.75rem;
-		font-weight: 700;
-		text-transform: uppercase;
-		color: #6b7280;
-	}
-	.navorder-tables {
-		list-style: none;
-		padding: 0;
-		margin: 0;
-	}
-	.navorder-table-row {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 4px;
-		padding: 2px 0.25rem 2px 0.75rem;
-		font-size: 0.8rem;
-		color: #4b5563;
-	}
-	.navorder-table-row:hover {
-		background-color: #e5e7eb;
-		border-radius: 0.25rem;
-	}
-	.navorder-table-title {
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-		flex: 1;
-	}
-	.navorder-move {
-		display: flex;
-		gap: 2px;
-		flex-shrink: 0;
-	}
-	.navorder-arrow {
-		background: none;
-		border: 1px solid #cbd5e1;
-		border-radius: 0.25rem;
-		color: #475569;
-		font-size: 0.6rem;
-		width: 20px;
-		height: 20px;
-		cursor: pointer;
-		line-height: 1;
-	}
-	.navorder-arrow:hover:not(:disabled) {
-		background-color: #f1f5f9;
-		color: #1f2937;
-	}
-	.navorder-arrow:disabled {
-		opacity: 0.4;
-		cursor: default;
-	}
-	.navorder-actions {
-		display: flex;
-		gap: 6px;
-		margin-top: 0.5rem;
-	}
-	.translate-config {
-		display: flex;
-		flex-direction: column;
-		gap: 6px;
-		padding: 0 0.25rem;
-	}
-	.translate-label {
-		display: flex;
-		flex-direction: column;
-		gap: 3px;
-		font-size: 0.7rem;
-		font-weight: 600;
-		color: #6b7280;
-	}
-	.translate-select,
-	.translate-input {
-		width: 100%;
-		box-sizing: border-box;
-		padding: 4px 6px;
-		border: 1px solid #cbd5e1;
-		border-radius: 0.25rem;
-		font-size: 0.8rem;
-		color: #1f2937;
-		outline: none;
-	}
-	.translate-langs {
-		display: flex;
-		gap: 6px;
-	}
-	.translate-langs .translate-label {
-		flex: 1;
-	}
-	.navorder-hint {
-		font-size: 0.68rem;
-		color: #9ca3af;
-		line-height: 1.3;
-	}
-	.backup-check {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		font-size: 0.72rem;
-		font-weight: 500;
-		color: #475569;
-		cursor: pointer;
-	}
 	.hidden {
 		display: none;
-	}
-	.create-type-form {
-		display: flex;
-		flex-direction: column;
-		gap: 6px;
-		padding: 0 0.25rem 0.5rem;
-	}
-	.create-type-actions {
-		display: flex;
-		gap: 6px;
 	}
 	.type-btn {
 		flex: 1;
@@ -1277,29 +616,6 @@
 	}
 	.type-btn-primary:hover {
 		background: #1d4ed8;
-	}
-	.type-row {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		padding: 3px 0.25rem;
-		font-size: 0.8rem;
-	}
-	.type-row:hover {
-		background-color: #e5e7eb;
-		border-radius: 0.25rem;
-	}
-	.type-row-label {
-		flex: 1;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-		color: #4b5563;
-	}
-	.type-count {
-		font-size: 0.7rem;
-		color: #94a3b8;
-		flex-shrink: 0;
 	}
 	.nav-group {
 		margin-bottom: 1.25rem;
@@ -1354,11 +670,6 @@
 		background-color: #e5e7eb;
 		color: #16a34a;
 	}
-	.sidebar-nav ul {
-		list-style: none;
-		padding: 0;
-		margin: 0;
-	}
 	.tree-row {
 		margin-bottom: 1px;
 	}
@@ -1404,28 +715,7 @@
 			opacity 0.15s,
 			background-color 0.15s;
 	}
-	.row-edit-btn {
-		background: none;
-		border: none;
-		color: #64748b;
-		font-size: 0.75rem;
-		padding: 2px 6px;
-		border-radius: 0.25rem;
-		cursor: pointer;
-		flex-shrink: 0;
-		visibility: hidden;
-		opacity: 0;
-		transition:
-			opacity 0.15s,
-			background-color 0.15s;
-	}
-	.row-edit-btn:hover {
-		background: #e2e8f0;
-		color: #1f2937;
-	}
-	.tree-row:hover .row-del-btn,
-	.type-row:hover .row-edit-btn,
-	.type-row:hover .row-del-btn {
+	.tree-row:hover .row-del-btn {
 		visibility: visible;
 		opacity: 1;
 	}

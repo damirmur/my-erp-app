@@ -389,6 +389,61 @@ class WorkspaceManager {
 		this.closeTabForce(`form_SYSTEM_CONFIUGRATOR_ID_${tableId}`);
 	}
 
+	// 8b. Открыть вкладку «Интерфейс» (порядок меню, видимость таблиц в основном
+	// режиме, сервис перевода). Одна общая вкладка на все настройки интерфейса.
+	openInterfaceConfigurator() {
+		const tabId = 'form_SYSTEM_INTERFACE_CONFIGURATOR_ID';
+		const existing = this.tabs.find((t) => t.id === tabId);
+		if (existing) {
+			this.activeTabId = tabId;
+			return;
+		}
+		this.tabs.push({
+			id: tabId,
+			type: 'form',
+			tableId: 'SYSTEM_INTERFACE_CONFIGURATOR_ID',
+			title: '🖥 Интерфейс',
+			isDirty: false
+		});
+		this.activeTabId = tabId;
+	}
+
+	// 8c. Открыть вкладку «Работа с информационной базой» (выгрузка/загрузка проекта).
+	openInfoBaseConfigurator() {
+		const tabId = 'form_SYSTEM_INFOBASE_CONFIGURATOR_ID';
+		const existing = this.tabs.find((t) => t.id === tabId);
+		if (existing) {
+			this.activeTabId = tabId;
+			return;
+		}
+		this.tabs.push({
+			id: tabId,
+			type: 'form',
+			tableId: 'SYSTEM_INFOBASE_CONFIGURATOR_ID',
+			title: '💾 Работа с информационной базой',
+			isDirty: false
+		});
+		this.activeTabId = tabId;
+	}
+
+	// 8d. Открыть вкладку «Работа с типами таблиц» (список, создание, удаление типов).
+	openTypesSection() {
+		const tabId = 'form_SYSTEM_TYPES_SECTION_ID';
+		const existing = this.tabs.find((t) => t.id === tabId);
+		if (existing) {
+			this.activeTabId = tabId;
+			return;
+		}
+		this.tabs.push({
+			id: tabId,
+			type: 'form',
+			tableId: 'SYSTEM_TYPES_SECTION_ID',
+			title: '🗂 Работа с типами таблиц',
+			isDirty: false
+		});
+		this.activeTabId = tabId;
+	}
+
 	// 8a. Открыть вкладку редактора типов. Вкладка общая (одна на все типы):
 	// recordId хранит текущий тип, переключение типов внутри вкладки меняет его.
 	openTypeConfigurator(typeName: string, label: string) {

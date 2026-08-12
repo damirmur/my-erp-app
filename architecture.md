@@ -22,20 +22,40 @@ my-erp-app/
 │   │   └── +page.svelte            # Root: sync on mount + every 60s, Sidebar + Workspace
 │   └── lib/
 │       ├── db/
-│       │   ├── indexeddb.ts        # Dexie schema version 3, TS interfaces (5 tables)
+│       │   ├── indexeddb.ts        # Dexie schema version 5, TS interfaces (5 tables)
 │       │   └── supabase.ts         # Supabase client singleton
 │       ├── services/
-│       │   ├── sync.ts             # Full sync: pull metadata/push data/pull data
+│       │   ├── sync.ts             # Full sync: metadata (version-gated) / push / pull data
 │       │   ├── records.ts          # Physical (irreversible) record deletion, server + Dexie
-│       │   ├── files.ts            # File/ZIP helpers: base64<->Blob, size check (20 MB), download
-│       │   ├── actionRunner.ts     # «Выполнить»: executes user JS code (config.runCode) in browser
-│       │   ├── deeplink.ts         # Unique hash links (#/t/, #/r/, #/l/) — parse/build/resolve values
-│       │   ├── printer.ts          # HTML template batch printing
+│       │   ├── files.ts            # Attachments: hydrate refs from data_files, externalize before push
+│       │   ├── actionRunner.ts     # «Выполнить»: runs user JS (config.runCode) in sandbox; saveRecordWithLines, apiCall
+│       │   ├── sandbox.ts          # Sandbox context: base + registered helpers
+│       │   ├── sandboxPlugins.ts   # Universal primitives: parsePdf, runCode, parseNum/parseAmount/parseDate
+│       │   ├── pdfText.ts          # PDF → text/rows (pdf.js, lazy, browser-only)
+│       │   ├── deeplink.ts         # Hash links (#/t/, #/r/, #/l/) + API-mode JSON (listJson/recordJson/execute)
+│       │   ├── apiCommand.ts       # API-mode execution (#/...{...}.json → workspace.apiResult)
+│       │   ├── flowRunner.ts       # Scenario graph executor (wave-based topological run)
+│       │   ├── flowElements.ts     # Node types catalog (constant/get/api/template/find/create/run)
+│       │   ├── flowLayout.ts       # SVG layout of a scenario graph (print form «Сценарий»)
+│       │   ├── triggers.ts         # Scenario triggers by table event (save/post/unpost/delete)
+│       │   ├── printer.ts          # Print forms engine (mustache-like {{}}, summary, preview)
+│       │   ├── deliver.ts          # «Отправить»: renders document → creates «Сообщение» (+attachment)
+│       │   ├── backup.ts           # Project export/import JSON (all 6 Supabase tables)
+│       │   ├── nameAuto.ts         # Field name from synonym (translate via api_services)
 │       │   └── numbers.ts          # Auto-fill date/number on save (year-scoped, strip non-digits)
 │       ├── state/
-│       │   ├── metadata.ts         # CRUD meta_tables/meta_columns via Supabase (+ setColumnVisibility)
-│       │   ├── notifications.ts    # Seed + migration: «Сервисы API», каналы, получатели, «Сообщение» (NOTIFY_RUN_CODE)
+│       │   ├── metadata.ts         # ensureSystemTables (history + core/default modules), CRUD meta_tables/columns
+│       │   ├── modules.ts          # Module registry (core/default/optional): ensure + seeds
+│       │   ├── seed.ts             # Idempotent seed helpers: ensureTable/ensureColumns/seedRecord/hasServerRows
+│       │   ├── settings.ts         # app_settings: main_nav_order, translate_service
+│       │   ├── printForms.ts       # «Печатные формы» registry (print_forms)
+│       │   ├── notifications.ts    # Сервисы API, каналы, «Сообщение» (NOTIFY_RUN_CODE) + seeds
+│       │   ├── apiQueries.ts       # «API-запросы» catalog (api_queries)
+│       │   ├── flows.ts            # Сценарии (flow_scenarios/nodes/links/elements) + trigger columns
+│       │   ├── constants.ts        # «Константы» (constants + periods)
 │       │   └── workspace.svelte.ts # Tab manager (Svelte 5 runes)
+│       ├── utils/
+│       │   └── ruFormat.ts         # parseRuNumber/parseRuAmount/parseRuDate (Russian number/date format)
 │       ├── table-types/
 │       │   ├── type.ts             # StatusDef, ActionDef, TableTypeModule, features interfaces
 │       │   ├── standardActions.ts  # Standard buttons generated from feature flags
@@ -45,45 +65,51 @@ my-erp-app/
 │       │   ├── document.ts         # Built-in "Документ"
 │       │   ├── constant.ts         # Built-in "Константа" (single record, periodic option)
 │       │   ├── tabular.ts          # Built-in "Табличная часть" (sub-table)
-│       │   └── template.ts         # Built-in "Шаблон" (for tabular sections)
+│       │   ├── template.ts         # Built-in "Шаблон" (print form registry)
+│       │   ├── flow.ts             # Built-in "Сценарий" (graph)
+│       │   └── system.ts           # Built-in "Системная" (history etc.)
 │       ├── fields/
 │       │   ├── field.ts            # FieldTypeModule interface
 │       │   ├── index.ts            # Registry (string, textarea, number, boolean, date, datetime,
-│       │   │                       #   birth, link, jsonb, file, zip) + formatFieldValue for lists
-│       │   ├── string.ts / textarea.ts / number.ts / boolean.ts / date.ts / datetime.ts
-│       │   │   / birth.ts / link.ts / jsonb.ts / file.ts / zip.ts
-│       │   ├── FileField.svelte    # Single file upload (base64 in jsonb)
-│       │   ├── ZipField.svelte     # Multiple files packed into a ZIP archive in-browser (zip.js)
-│       │   └── LinkConfig.svelte   # Link target-table picker for Configurator
+│       │   │                       #   birth, link, jsonb, file, zip, universal, linelink, select, paramslist)
+│       │   ├── *.ts / *.svelte     # Per-type module + editor component
+│       │   ├── GroupField.svelte   # Virtual «Группа» field (hierarchy)
+│       │   ├── LinkConfig.svelte   # Link target-table picker for Configurator
+│       │   └── LinelinkConfig.svelte
 │       ├── vendor/
 │       │   └── zip.min.js          # Self-contained ESM build of zip.js 2.x (kept out of static/)
 │       └── components/
 │           ├── ui/
 │           │   └── LookupInput.svelte     # Searchable autocomplete (liveQuery) + clear ✕ button
 │           ├── layout/
-│           │   ├── Sidebar.svelte         # Nav: tables grouped by type + Configurator
-│           │   └── Workspace.svelte       # Tab bar + dynamic content + hard-refresh (🔄)
+│           │   ├── Sidebar.svelte         # Nav: tables grouped by type + Конструктор tabs
+│           │   ├── Workspace.svelte       # Tab bar + dynamic content + hard-refresh (🔄)
+│           │   ├── ApiResultModal.svelte  # «API» panel (JSON result, scenario steps)
+│           │   └── PrintPreviewModal.svelte # «👁 На экране» print preview
 │           └── dynamic/
-│               ├── ConfiguratorForm.svelte # Meta-UI: tables/columns/types/TЧ, field order (▲/▼)
-│               ├── DynamicForm.svelte      # Record form (type-driven readOnly/actions)
-│               ├── DynamicList.svelte      # Table list (hierarchy, sort, bulk, column visibility)
-│               ├── TabularSection.svelte   # Inline editable sub-table (hardcoded columns)
-│               └── Toolbar.svelte          # Action buttons + ⋮ menu + ⚙️ column-visibility menu
+│               ├── ConfiguratorForm.svelte  # Meta-UI: tables/columns/types/TЧ, field order (▲/▼)
+│               ├── DynamicForm.svelte       # Record form (type-driven readOnly/actions)
+│               ├── DynamicList.svelte       # Table list (hierarchy, sort, bulk, column visibility)
+│               ├── TabularSection.svelte    # Inline editable sub-table (dynamic columns)
+│               ├── Toolbar.svelte           # Action buttons + ⋮ menu + ⚙️ column-visibility menu
+│               ├── TypeConfiguratorForm.svelte # Type presets editor (statuses/features/fields/actions)
+│               ├── PeriodsTable.svelte      # ТЧ «Периоды» (periodic constants)
+│               └── InterfaceConfigurator.svelte / InfoBaseConfigurator.svelte / TypesSectionForm.svelte
 ```
 
 ---
 
-## Dexie (IndexedDB) Schema — `version(3)`
+## Dexie (IndexedDB) Schema — `version(5)`
 
-| Table          | Key                    | Fields                                                                                                    |
-| -------------- | ---------------------- | --------------------------------------------------------------------------------------------------------- |
-| `meta_tables`  | `id`, `&name` (unique) | `title`, `type`, `parent_table_id`, `config?` (JSON)                                                      |
-| `meta_columns` | `id`                   | `table_id`, `name`, `title`, `type`, `related_table_id?`, `sort_order`, `is_visible`                      |
-| `data_records` | `id`                   | `table_id`, `status`, `data` (JSON), `number`, `date`, `parent_id`, `is_folder`, `is_dirty`, `updated_at` |
-| `data_lines`   | `id`                   | `record_id`, `table_id`, `data` (JSON), `sort_order`                                                      |
-| `print_forms`  | `id`                   | `table_id`, `name`, `template`, `is_default`                                                              |
+| Table          | Key                    | Fields                                                                                  |
+| -------------- | ---------------------- | --------------------------------------------------------------------------------------- |
+| `meta_tables`  | `id`, `&name` (unique) | `title`, `type`, `parent_table_id`, `config?` (JSON)                                    |
+| `meta_columns` | `id`                   | `table_id`, `name`, `title`, `type`, `related_table_id?`, `sort_order`, `is_visible`    |
+| `data_records` | `id`                   | `table_id`, `status`, `data` (JSON), `parent_id`, `is_folder`, `is_dirty`, `updated_at` |
+| `data_lines`   | `id`                   | `record_id`, `table_id`, `data` (JSON), `sort_order`                                    |
+| `data_files`   | `id`                   | `record_id`, `column_id`, `name`, `size`, `type`, `content` (base64)                    |
 
-**Binary fields (file / zip)**: no dedicated table. File bytes are stored **base64 inside the record's `data` JSONB** as `{ name, size, type, data }` (`StoredFile`) or `{ name, files: [...], data }` (`StoredZip`). Limit is `MAX_FILE_SIZE = 20 MB` (`services/files.ts`). IndexedDB has no trouble with such strings; Supabase `jsonb` handles them too — the practical cap is the PostgREST request size.
+**Binary fields (file / zip)**: the payload lives in `data_files` (a mirror of the server table added by migration `0010`). In `record.data[col]` / line data there is only a **reference** `{ name, size, type, fileId }`; the base64 contents are hydrated on demand (`hydrateFileValue`/`hydrateFilesInObject` in `services/files.ts`) and externalized back to the storage before pushing to the server (`externalizeFilesInObject`). Limit is `MAX_FILE_SIZE = 20 MB`. The old inline base64-in-JSONB storage was removed.
 
 ---
 
@@ -116,8 +142,8 @@ Irreversible delete used by `delete` and `purgeMarked` actions:
 
 ### Read path (pull on interval)
 
-1. `pullMetadata()` — clears and re-fetches `meta_tables`, `meta_columns`, `print_forms` from Supabase
-2. `pullDataChanges()` — fetches records with `updated_at > lastSync`, merges into IndexedDB
+1. `pullMetadata()` — version-gated by `meta_version` (a `app_settings` record): skipped when the server version matches the cached one and the local cache is non-empty; otherwise it clears and re-fetches `meta_tables` + `meta_columns` in one transaction. Table types are synced separately by `syncTableTypes()` (`meta_table_types`).
+2. `pullDataChanges()` — fetches records with `updated_at > lastSync` (anchor in localStorage), merges into IndexedDB; `data_files` rows of the fetched records are mirrored as well.
 3. UI components use `liveQuery()` / direct `db.*` queries — React automatically
 
 ### Metadata is pushed directly
@@ -190,7 +216,7 @@ Any table/record exposes a «JSON command» that returns data — or executes th
 
 - `parseHash` detects the `.json` / `.execute({...}).json` suffixes on the `t`/`r` segment and returns the new `DeepLink` kinds `listJson`/`recordJson`/`execute`. Params literal (`{city:Orenburg}` — unquoted keys/strings, or strict JSON) is parsed **without eval** by `parseParamsLiteral` (small recursive-descent parser in `deeplink.ts`).
 - Execution lives in `src/lib/services/apiCommand.ts` (`runApiCommand(link)`): for `execute` it calls `runRecordAction` (`actionRunner.ts` — loads record/table/lines, merges defaults via `mergeParams`, passes `params` into the context, never throws). If the table has no `runCode`, it falls back to a **declarative** call: if the record has a `service` link (catalog «API-запросы») → `apiCall(serviceRecord, params)`; if it **is an API service** (has `base_url`) → `apiCall(record, params)`. So any «API-запрос» or «Сервисы API» row works as an endpoint: `#/r/{id}.execute({...}).json`. For `json` kinds it reuses `resolveLink` and serializes to a clean JSON object. Result → `workspace.apiResult`.
-- **API-queries catalog** (`src/lib/state/apiQueries.ts`): system document `api_queries` seeded idempotently via `ensureApiQueryTables()` (from `metadata.ensureSystemTables()`, after notifications) + `seedApiQueryDefaults()` (in `sync.runFullSync`, after `seedNotificationDefaults()`). Each record = `service` link → api_services + `params` jsonb defaults + optional runCode. `mergeParams(record, linkParams)` = `{ ...record.data.params, ...linkParams }` (link wins by key) and is applied in `runRecordAction` and `runAnotherTable`; `DynamicForm`/`DynamicList` `handleRun` now delegate to `runRecordAction` (result → API panel), so ▶️ works for both coded and declarative records.
+- **API-queries catalog** (`src/lib/state/apiQueries.ts`): system document `api_queries` seeded idempotently via `ensureApiQueryTables()` (from `metadata.ensureSystemTables()`, after notifications) — table only, **no example records** (the «Погода (wttr.in)» seed example was removed together with its wttr service; concrete queries are data, created in the constructor). Each record = `service` link → api_services + `params` jsonb defaults + optional runCode. `mergeParams(record, linkParams)` = `{ ...record.data.params, ...linkParams }` (link wins by key) and is applied in `runRecordAction` and `runAnotherTable`; `DynamicForm`/`DynamicList` `handleRun` now delegate to `runRecordAction` (result → API panel), so ▶️ works for both coded and declarative records.
 - `workspace.openFromLink` handles the new kinds and returns them to the caller; `+page.svelte` renders `ApiResultModal.svelte` (pretty-printed JSON, «Копировать URL» / «Копировать JSON», error display).
 - `runCode` context gained `params` (params from the link) and `link.execute(recordId, params?)` / `link.recordJson(id)` / `link.listJson(id)` helpers (see `linkApi`). The `return` value of `runCode` is now surfaced in the API panel: `DynamicForm`/`DynamicList` `handleRun` capture it and call `workspace.showApiResult(...)`.
 - Building links: `buildExecuteUrl` / `buildRecordJsonUrl` / `buildListJsonUrl`; `buildUrl` emits `#/r/{id}.execute(<JSON.stringify(params)>).json`.
@@ -199,11 +225,12 @@ Any table/record exposes a «JSON command» that returns data — or executes th
 
 History is a **change journal** stored in a real system table (`meta_tables.name = 'history'`, `type = 'system'`, hidden from main-mode groups via `config.hiddenInMain`). It is seeded idempotently by `metadata.ensureSystemTables()` (Supabase + local IndexedDB cache) at app start (`+page.svelte`) and at the beginning of each `runFullSync` cycle, before `pullMetadata`. The «Событие» column is added to existing installs by the same idempotent seed (`ensureHistoryColumns` creates only missing columns).
 
-Only **saves and deletes** are recorded — openings are deliberately not logged:
+Only **saves, deletes and scenario runs** are recorded — openings are deliberately not logged:
 
 - `DynamicForm.saveToDb` → `workspace.recordHistory(tableId, title, buildRecordUrl(recordId), 'save', targetStatus)` (fires on save, posting and mark-for-deletion)
 - `saveRecordWithLines` (runCode `save()`, `src/lib/services/actionRunner.ts`) → `'save'`
 - `physicalDeleteRecords` (`src/lib/services/records.ts`) captures titles from the local cache **before** deletion, then writes `'delete'`
+- scenario runs → `workspace.recordFlowRun` (trigger scenarios in `triggers.ts` and manual/API runs via the «API» panel): event «выполнение сценария (ошибка)» / «выполнение сценария», `extra = { failed, description, steps, error, result }` — the link leads to the scenario
 
 Record shape: `data = { object_title, link, opened_at, event, event_type }` (`event` = «сохранение (статус)» / «удаление» / «выполнение сценария…»; `event_type` = `save`/`delete`/`run`). Flow runs add `data.description` (readable per-step resume), `steps`, `error` and `result`. Each operation is its own row (no dedup); system tables themselves are skipped. Capped at 50 rows (`HISTORY_LIMIT`). Rows are ordinary records, so they sync to Supabase like any other data. `workspace.clearHistory()` removes them locally and on the server.
 
@@ -249,6 +276,30 @@ Seeded idempotently by `ensureNotificationTables()` (called from `metadata.ensur
 
 ТЧ «Получатели» содержит контрагента и (необязательно) канал. Действие для каждой строки читает ТЧ «Контакты» контрагента (`data_lines`, `record_id` = контрагент), берёт значение по каналу (канал не задан — все контакты), группирует строки по `service` канала (fallback: первый активный сервис) и шлёт **один запрос на сервис** с `{ message, file?, channels: [{ type, id }] }`. Результаты — в `last_response` (массив `{ service, ok, status, response }`), `last_result` = `ok`/`fail`. Run-код должен оставаться **побайтово идентичным** серверной копии (маркеры в `RUN_CODE_LEGACY`).
 
+**Seed services**: сид добавляет только сервисы, реализованные на сервере (`astro3d.ru/api`): прокси-шлюз, уведомления, переводчик, Renderer (HTML/SVG → PNG/PDF). Примеры (wttr.in, астрологические, Nominatim) из сида удалены — в старых установках они остаются как данные до ручного удаления.
+
+---
+
+## Modules & seeds («сид vs данные»)
+
+The engine is **universal** — it knows no subject domain (banks, weather, astrology, schedules…). Everything concrete is **data**, not code. The seed (code) contains only what the engine needs to run or references **by name**:
+
+- **Runtime mechanics**: sandbox (`runActionCode`, `sandbox.ts`/`sandboxPlugins.ts`), `flowRunner`/`flowElements`/`triggers`, `printer`, `sync`, `deeplink`, `numbers`, `files`; field/table types (added by SQL migrations at deploy — new DBs get them automatically).
+- **System tables referenced by name**: `history`, `app_settings`, `print_forms` (registry — empty, concrete forms are data), `api_services` (only server-implemented services), `flow_scenarios`/`flow_nodes`/`flow_links`/`flow_elements` (tables; scenarios and catalog elements are data), `notify_channels`/`notify_messages` (+ТЧ), `constants`.
+- **Universal sandbox primitives** (`sandboxPlugins.ts`): `parsePdf` (PDF → text/rows), `runCode` (run a code string stored in data), `parseNum`/`parseAmount`/`parseDate` (`src/lib/utils/ruFormat.ts`). A primitive is added only if it serves the engine as a whole, not one domain.
+
+Everything else — tables, records, scenarios, print forms, example services — is **data**: delivered to a new DB by project backup (`exportProject`/`importProject`, «Работа с информационной базой») or built in the constructor. Seeds are **idempotent** (tables by `name` via `ensureTable`, columns only missing via `ensureColumns`, records only into an empty catalog via `seedRecord`+`hasServerRows`) and never delete existing rows.
+
+## Scenario engine (`flow`)
+
+A «Сценарий» record is an n8n-like graph: nodes and edges live in ТЧ `flow_nodes`/`flow_links`; the «Элементы сценария» catalog (`flow_elements`) holds reusable node configs (a node may override an element's params/service/code). `flowRunner.flowExecute` runs the graph **wave-based topologically**: a node fires when all its incoming edges are satisfied, ready nodes run in parallel (`Promise.all`), results accumulate into a `context` referenced via `${node_title}` / `${input}` / `${key}`. Node types (`flowElements.runFlowElement`): `constant`, `get`, `api`, `template`, `find`, `create`, `run`; a node with `code` runs it in the sandbox (context gains `input`/`inputs`/`params`), a node with `service` does a declarative `apiCall`. Returns `{ results, last, steps }` — per-node `steps` (ok/error/pending, error text, duration) shown in the «API» panel.
+
+**Scenario triggers** (`triggers.ts`): a scenario declares `trigger_table` + `trigger_event` (save/post/unpost/delete) and fires **synchronously after** the save commits (a trigger failure never rolls back the record). Every run is logged to «История»; recursion guard `isTriggerActive()` prevents saves made inside a trigger from re-firing. Use case: **«Импорт банковской выписки»** — a data scenario bound to `bank_statements` on save that imports operations from the attached PDF on universal primitives (`parsePdf` → `runCode(parser_code)` → normalize/dedup → find-or-create account → `save()`); an empty `params.record.file` returns `{ skipped: true }` and leaves ТЧ untouched.
+
+## Print forms (`print_forms` + `printer.ts`)
+
+«Печатные формы» is a registry (`print_forms`, type `template`, edited in constructor): each record = `target_table` + `template_html` + optional fill `code` (sandbox) + `delivery` ways (print/screen/send/download) + `output_format` html|svg + `summary`. The 🖨️ «Вывод» button is a **delivery menu** (0 forms → hidden; several forms → «форма → способы» submenu). `printerService.renderRecords` renders via a mustache-like engine (`{{doc.field}}`, `{{#each <ТЧ>}}`, `{{sum:}}`, `{{count:}}`, `{{form.*}}` — innermost `{{#each}}` blocks first); the `code` may return an HTML string used as-is or a data object rendered by the template (`output_format='svg'` extracts the `<svg>`). «Отправить» (`deliver.ts`) renders the document and creates a «Сообщение» with a text summary and the source attached (html/svg — the extension tells the gateway how to deliver). `previewTemplate` shows a live preview inside the constructor editor.
+
 ---
 
 ## Table Types System (Plugin Architecture)
@@ -286,9 +337,10 @@ Each table type defines its own:
 - Executed **in the browser** by `runActionCode(code, ctx)` (`actionRunner.ts`):
   `new Function(...paramNames, 'return (async () => {...})()')` — code is an async body
 - Variables available to user code without prefix: `record` (LocalRecord), `records` (selected), `lines` (ТЧ rows),
-  `db` (Dexie), `supabase`, `save(record, lines?)` (marks `is_dirty: 1`), `log(...args)` (console),
+  `params` (input params from an API link), `db` (Dexie), `supabase`, `save(record, lines?)` (marks `is_dirty: 1`), `log(...args)` (console),
   `link` (deep-link helpers — `link.get(href)` returns values, `link.record/line/table(id)` generate links),
-  `apiCall(service, params?, body?)` (call an external API via the «Сервисы API» catalog — see Notifications section)
+  `apiCall(service, params?, body?)` (call an external API via the «Сервисы API» catalog — see Notifications section),
+  `flow(recordId, params?)` (run a scenario), plus the universal sandbox primitives `parsePdf`, `runCode`, `parseNum`/`parseAmount`/`parseDate`
 - Example: `record.data.total_amount = 42; await save(record);`
 - After form execution DynamicForm re-reads the record and refreshes `recordData`
 
@@ -341,20 +393,23 @@ Runtime `ActionDef` uses function predicates: `show?: (status) => boolean`. DB s
 
 ## Field Types System
 
-| Module    | type          | label                        | FormField                                    | Configurator                     |
-| --------- | ------------- | ---------------------------- | -------------------------------------------- | -------------------------------- |
-| string    | `'string'`    | Строка                       | `<input type="text">`                        | —                                |
-| textarea  | `'textarea'`  | Текст                        | `<textarea>`                                 | —                                |
-| number    | `'number'`    | Число                        | `<input type="number">`                      | —                                |
-| boolean   | `'boolean'`   | Булево                       | `<input type="checkbox">`                    | —                                |
-| date      | `'date'`      | Дата                         | `<input type="date">`                        | —                                |
-| datetime  | `'datetime'`  | Дата и время                 | DateTimeField                                | —                                |
-| birth     | `'birth'`     | День рождения                | BirthField (date + timezone)                 | —                                |
-| jsonb     | `'jsonb'`     | JSON                         | JsonField (textarea + parse)                 | —                                |
-| link      | `'link'`      | Ссылка                       | LookupInput wrapper                          | LinkConfig (select target table) |
-| file      | `'file'`      | Файл                         | FileField (single upload)                    | —                                |
-| zip       | `'zip'`       | ZIP-архив (несколько файлов) | ZipField (multi + pack)                      | —                                |
-| universal | `'universal'` | Универсальное                | UniversalField (type select + chosen editor) | —                                |
+| Module     | type           | label                        | FormField                                     | Configurator                     |
+| ---------- | -------------- | ---------------------------- | --------------------------------------------- | -------------------------------- |
+| string     | `'string'`     | Строка                       | `<input type="text">`                         | —                                |
+| textarea   | `'textarea'`   | Текст                        | `<textarea>`                                  | —                                |
+| number     | `'number'`     | Число                        | `<input type="number">`                       | —                                |
+| boolean    | `'boolean'`    | Булево                       | `<input type="checkbox">`                     | —                                |
+| date       | `'date'`       | Дата                         | `<input type="date">`                         | —                                |
+| datetime   | `'datetime'`   | Дата и время                 | DateTimeField                                 | —                                |
+| birth      | `'birth'`      | День рождения                | BirthField (date + timezone)                  | —                                |
+| jsonb      | `'jsonb'`      | JSON                         | JsonField (textarea + parse)                  | —                                |
+| link       | `'link'`       | Ссылка                       | LookupInput wrapper                           | LinkConfig (select target table) |
+| file       | `'file'`       | Файл                         | FileField (single upload)                     | —                                |
+| zip        | `'zip'`        | ZIP-архив (несколько файлов) | ZipField (multi + pack)                       | —                                |
+| universal  | `'universal'`  | Универсальное                | UniversalField (type select + chosen editor)  | —                                |
+| linelink   | `'linelink'`   | Ссылка на строку ТЧ          | LineLinkField (dropdown of a sub-table rows)  | LinelinkConfig                   |
+| select     | `'select'`     | Выбор из списка              | SelectField (options from `selectOptionsFor`) | —                                |
+| paramslist | `'paramslist'` | Параметры (JSON-объект)      | ParamsListField (key/value with per-key type) | —                                |
 
 **Note**: DynamicForm resolves fields dynamically via `{@const FC = fieldRegistry[col.type]?.FormField}` — adding a new field type module to the registry is sufficient; no DynamicForm edits required.
 
@@ -366,9 +421,9 @@ Runtime `ActionDef` uses function predicates: `show?: (status) => boolean`. DB s
 
 ### File / ZIP fields
 
-- Values live in `record.data[col.name]` as `StoredFile` / `StoredZip` objects (base64 in JSONB).
-- `FileField.svelte`: pick one file → `fileToStoredFile()` → stored as `{ name, size, type, data }`; renders name + size, allows replace/delete/download.
-- `ZipField.svelte`: add **multiple** files → stored as `{ name, files: [{name, size}], data }` where `data` is a **prebuilt ZIP archive**; download re-builds the archive from the stored blob. Supports removing individual entries.
+- Values live in `record.data[col.name]` as a **reference** `{ name, size, type, fileId }`; the base64 payload is stored in `data_files` (Dexie + server table, migration `0010`) and hydrated on demand (`hydrateFileValue` / `hydrateFilesInObject` in `services/files.ts`). Before pushing to the server inline values are externalized back (`externalizeFilesInObject`).
+- `FileField.svelte`: pick one file → `fileToStoredFile()` → reference with `fileId`; renders name + size, allows replace/delete/download.
+- `ZipField.svelte`: add **multiple** files → stored as `{ name, files: [{name, size}], fileId }` where the payload is a **prebuilt ZIP archive**; download re-builds the archive from the stored blob. Supports removing individual entries.
 - **zip.js is vendored** at `src/lib/vendor/zip.min.js` (self-contained ESM bundle, first line `// @ts-nocheck`). Loaded lazily via `await import('$lib/vendor/zip.min.js')` inside the component — keeps it out of the initial bundle. It must NOT live in `static/`: Vite resolves only JS modules, a static URL breaks the build.
 - **zip.js pitfalls** (see `ZipField.svelte`):
   - Use `useCompressionStream: false` — the native `CompressionStream` path crashes in Chromium (`Cannot read properties of undefined (reading 'pipeThrough')`).
@@ -412,6 +467,7 @@ Runtime `ActionDef` uses function predicates: `show?: (status) => boolean`. DB s
 ### ConfiguratorForm
 
 - Full meta-UI in left column (create table, manage types) + right column (edit columns, ТЧ, settings)
+- Constructor tabs in the sidebar: «🖥 Интерфейс» (main-menu order, translate service — `InterfaceConfigurator.svelte`), «💾 Работа с информационной базой» (project export/import — `InfoBaseConfigurator.svelte`), «⚙️ Типы таблиц» (`TypesSectionForm.svelte`), «🗂 Предустановки типа» (`TypeConfiguratorForm.svelte`)
 - Uses `liveQuery` for reactive table list
 - All mutations go directly to Supabase, then `syncService.runFullSync()`
 - When feature `run` is enabled — textarea `runCode` (JS body, async) with hint and example
@@ -435,7 +491,7 @@ Runtime `ActionDef` uses function predicates: `show?: (status) => boolean`. DB s
 - **Metadata deletion is cascaded** (`metadata.ts`): `deleteTableCascade` removes `data_records` + `data_lines` (server via `.in('table_id')`, local via `.anyOf`) before deleting `meta_tables`.
 - **Service Worker is network-first** (`service-worker.ts`): fetch fresh from server, cache successful responses, fall back to cache only when offline. Do NOT switch back to cache-first — Vite dev module URLs are un-hashed, so cache-first serves stale code and breaks hot changes (CDP/browser tests must still clear `caches` + unregister the SW once to drop an old cache).
 - **Hard refresh (🔄 in Workspace)**: runs `runFullSync()` → clears all 5 Dexie tables → deletes all Cache Storage entries → `location.replace` with a `?hard=<timestamp>` query (busts SW/navigation cache). Used to reset a stale offline cache.
-- **Supabase schema migrations** live in `supabase/migrations/` (`0001_cloud_init.sql` is a full dump; `0002_add_file_zip_column_types.sql` adds `file`/`zip` to the `column_type` enum; `0003_add_datetime_birth_column_types.sql` adds `datetime`/`birth`). The folder is gitignored — applied manually with `supabase db push` from `supabase/`.
+- **Supabase schema migrations** live in `supabase/migrations/`: `0001_cloud_init.sql` (full dump), `0002` adds `file`/`zip`, `0003` `datetime`/`birth`, `0004` `universal`, `0006` `linelink`, `0007` `select`, `0008` `paramslist` to the `column_type` enum; `0005` adds primary keys; `0009` perf indexes; `0010` adds the `data_files` attachment storage. The folder is gitignored — applied manually with `supabase db push` (or `supabase/init_full.sql` via SQL Editor).
 - **Locale-aware dates**: `formatFieldValue` and the `opened_at` special case in `DynamicList` format `date`/`datetime` via `Intl.DateTimeFormat` with the browser's locale (`dateStyle: 'short'`, `timeStyle: 'short'`).
 - **Supabase anon key** in `.env` (gitignored), imported via `$env/static/public`.
 - **`npm run check`** for type-checking (run `svelte-kit sync` first). No test suite.

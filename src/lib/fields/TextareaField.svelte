@@ -1,9 +1,35 @@
 <script lang="ts">
-	let { value = $bindable(''), disabled = false, onChange = (_e: Event) => {} } = $props();
+	let {
+		value = $bindable(''),
+		disabled = false,
+		onChange = (_e: Event) => {},
+		autogrow = false
+	} = $props();
+
+	let textarea: HTMLTextAreaElement | undefined = $state();
+
+	// Высота по содержимому (autogrow: true для шаблона печатной формы)
+	function autoGrow() {
+		if (!autogrow || !textarea) return;
+		textarea.style.height = 'auto';
+		textarea.style.height = textarea.scrollHeight + 'px';
+	}
+
+	$effect(() => {
+		if (autogrow && textarea) autoGrow();
+	});
 </script>
 
-<textarea bind:value oninput={(e: Event) => onChange(e)} {disabled} rows="4" class="textarea-field"
-></textarea>
+<textarea
+	bind:value
+	bind:this={textarea}
+	oninput={(e: Event) => {
+		onChange(e);
+		autoGrow();
+	}}
+	{disabled}
+	rows="4"
+	class="textarea-field"></textarea>
 
 <style>
 	.textarea-field {
@@ -16,6 +42,7 @@
 		border-radius: 0.25rem;
 		outline: none;
 		resize: vertical;
+		min-height: 40px;
 	}
 	.textarea-field:focus {
 		border-color: #3b82f6;

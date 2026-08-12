@@ -14,6 +14,7 @@
 	import { isValidBirthLocal, defaultBirth } from '$lib/fields/birth';
 	import { selectOptionsFor, loadSelectOptions } from '$lib/services/flowElements';
 	import { buildExecuteUrl, buildRecordUrl, fullUrlFor } from '$lib/services/deeplink';
+	import { PRINT_FORMS_TABLE } from '$lib/state/printForms';
 	import Toolbar from './Toolbar.svelte';
 	import TabularSection from './TabularSection.svelte';
 	import PeriodsTable from './PeriodsTable.svelte';
@@ -667,6 +668,68 @@
 		recordId;
 		loadForm();
 	});
+
+	// ---- Шаблон печатной формы (таблица print_forms) ----
+	// Поле «Шаблон HTML» вынесено в самый низ формы и показывается вкладками:
+	// «📝 Шаблон HTML» (редактор, высота по содержимому) и «👁 Просмотр»
+	// (рендер template_html/code на примере целевой таблицы). Предпросмотр
+	// автоматически перерисовывается при правке шаблона, пока открыта вкладка.
+	let isPrintForm = $derived(tableMeta?.name === PRINT_FORMS_TABLE);
+	let templateTab = $state<'editor' | 'preview'>('editor');
+	let previewHtml = $state('');
+	let previewSvg = $state('');
+	let previewFormat = $state<'html' | 'svg'>('html');
+	let previewError = $state('');
+	let previewBusy = $state(false);
+
+	// Колонки сетки: у печатной формы шаблон рендерится внизу отдельной вкладкой
+	let gridColumns = $derived(
+		isPrintForm ? columns.filter((c) => c.name !== 'template_html') : columns
+	);
+	let templateCol = $derived(columns.find((c) => c.name === 'template_html') ?? null);
+
+	function switchTemplateTab(tab: 'editor' | 'preview') {
+		templateTab = tab;
+		if (tab === 'preview') refreshPreview();
+	}
+
+	async function refreshPreview() {
+		if (!isPrintForm) return;
+		previewBusy = true;
+		try {
+			const result = await printerService.previewTemplate({
+				templateHtml: String(recordData.template_html ?? ''),
+				code: String(recordData.code ?? ''),
+				outputFormat: String(recordData.output_format ?? 'html'),
+				targetTableId: String(recordData.target_table ?? '')
+			});
+			previewHtml = result.html;
+			previewSvg = result.svg ?? '';
+			previewFormat = result.format;
+			previewError = result.error ?? '';
+		} catch (e: any) {
+			previewError = e?.message ?? String(e);
+			previewHtml = '';
+			previewSvg = '';
+		} finally {
+			previewBusy = false;
+		}
+	}
+
+	// Следим за изменением шаблона/кода/целевой таблицы и перерисовываем
+	// предпросмотр (с небольшой задержкой, чтобы не дёргать на каждый ввод).
+	let previewTimer: ReturnType<typeof setTimeout> | undefined;
+	$effect(() => {
+		if (!isPrintForm || templateTab !== 'preview') return;
+		recordData.template_html;
+		recordData.code;
+		recordData.output_format;
+		recordData.target_table;
+		if (previewTimer) clearTimeout(previewTimer);
+		previewTimer = setTimeout(() => {
+			refreshPreview();
+		}, 500);
+	});
 </script>
 
 <div class="form-container">
@@ -699,7 +762,7 @@
 						/>
 					</div>
 				{/if}
-				{#each columns as col}
+				{#each gridColumns as col}
 					{@const FC = fieldRegistry[col.type]?.FormField}
 					<div class="form-field" class:wide={wideFieldTypes.includes(col.type)}>
 						<label for={col.id}>
@@ -760,6 +823,64 @@
 								/>
 							{/if}
 						</div>
+					{/if}
+				</div>
+			{/if}
+
+			{#if isPrintForm}
+				<div class="print-template-pane">
+					<div class="print-template-tabs">
+						<button
+							class="print-tab-btn"
+							class:active={templateTab === 'editor'}
+							onclick={() => switchTemplateTab('editor')}
+						>
+							📝 Шаблон HTML
+						</button>
+						<button
+							class="print-tab-btn"
+							class:active={templateTab === 'preview'}
+							onclick={() => switchTemplateTab('preview')}
+						>
+							👁 Просмотр{#if previewBusy && templateTab === 'preview'}
+								…{/if}
+						</button>
+					</div>
+					{#if templateTab === 'editor'}
+						{#if templateCol}
+							{@const FC = fieldRegistry[templateCol.type]?.FormField}
+							<div class="form-field wide print-template-editor">
+								<label for={templateCol.id}>{templateCol.title}</label>
+								{#if FC}
+									<FC
+										bind:value={recordData[templateCol.name]}
+										disabled={readOnly}
+										onChange={markAsDirty}
+										relatedTableId={templateCol.related_table_id ?? ''}
+										{recordId}
+										autogrow
+									/>
+								{/if}
+							</div>
+						{/if}
+					{:else}
+						{#if previewError}
+							<div class="preview-error">{previewError}</div>
+						{/if}
+						{#if previewFormat === 'svg' && previewSvg}
+							<div class="preview-svg">{@html previewSvg}</div>
+						{:else if previewHtml}
+							<iframe
+								class="preview-frame"
+								title="Предпросмотр шаблона печатной формы"
+								sandbox="allow-same-origin"
+								srcdoc={previewHtml}
+							></iframe>
+						{:else if !previewBusy}
+							<div class="preview-empty">
+								Форма не выбрана или шаблон пуст — заполните «Шаблон HTML».
+							</div>
+						{/if}
 					{/if}
 				</div>
 			{/if}
@@ -891,5 +1012,74 @@
 	}
 	.btn-link-copy:hover {
 		background-color: #e2e8f0;
+	}
+	.form-link-row {
+		display: flex;
+		justify-content: flex-end;
+		gap: 6px;
+		align-items: center;
+	}
+	.print-template-pane {
+		margin-top: 1.5rem;
+		border-top: 1px solid #e2e8f0;
+		padding-top: 0.75rem;
+	}
+	.print-template-tabs {
+		display: flex;
+		gap: 2px;
+		background: #f8fafc;
+		border-bottom: 1px solid #cbd5e1;
+		margin-bottom: 10px;
+	}
+	.print-tab-btn {
+		background: none;
+		border: none;
+		padding: 6px 12px;
+		font-size: 0.8rem;
+		cursor: pointer;
+		color: #64748b;
+	}
+	.print-tab-btn.active {
+		background: #ffffff;
+		border-bottom: 2px solid #2563eb;
+		color: #1e3a8a;
+		font-weight: 600;
+	}
+	.print-template-editor :global(textarea) {
+		min-height: 200px;
+		resize: vertical;
+	}
+	.preview-error {
+		background: #fef2f2;
+		border: 1px solid #fecaca;
+		color: #b91c1c;
+		border-radius: 4px;
+		padding: 8px 10px;
+		font-size: 0.8rem;
+		margin-bottom: 8px;
+		white-space: pre-wrap;
+	}
+	.preview-frame {
+		width: 100%;
+		min-height: 400px;
+		border: 1px solid #cbd5e1;
+		border-radius: 4px;
+		background: #fff;
+		box-sizing: border-box;
+	}
+	.preview-svg {
+		border: 1px solid #cbd5e1;
+		border-radius: 4px;
+		background: #fff;
+		padding: 8px;
+		overflow: auto;
+		max-height: 500px;
+		display: flex;
+		justify-content: center;
+	}
+	.preview-empty {
+		color: #94a3b8;
+		font-size: 0.85rem;
+		padding: 8px 0;
 	}
 </style>

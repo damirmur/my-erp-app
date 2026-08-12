@@ -499,6 +499,181 @@ export const printerService = {
 	},
 
 	/**
+	 * Предпросмотр шаблона печатной формы прямо в редакторе (конструктор,
+	 * таблица print_forms). Рендерит template_html (и код заполнения code, если
+	 * есть) на примере целевой таблицы: берёт первую реальную запись таблицы,
+	 * а если записей нет — строит образец из колонок. Удобно видеть результат
+	 * при разработке/правке шаблона до печати.
+	 *
+	 * Возвращает полный HTML-документ (для iframe srcdoc); при format='svg'
+	 * дополнительно извлекает <svg>.
+	 */
+	async previewTemplate(opts: {
+		templateHtml: string;
+		code: string;
+		outputFormat: string;
+		targetTableId: string;
+	}): Promise<{ html: string; svg?: string; format: 'html' | 'svg'; error?: string }> {
+		const { templateHtml, code, outputFormat, targetTableId } = opts;
+		const format: 'html' | 'svg' = outputFormat === 'svg' ? 'svg' : 'html';
+
+		// Целевая таблица: колонки + подтаблицы
+		const targetMeta = targetTableId ? await db.meta_tables.get(targetTableId) : null;
+		const tableTitle = targetMeta?.title ?? 'Документ';
+		const columns = targetTableId
+			? await db.meta_columns.where('table_id').equals(targetTableId).sortBy('sort_order')
+			: [];
+		const allTables = await db.meta_tables.toArray();
+		const subTables = allTables.filter((t) => t.parent_table_id === targetTableId);
+
+		// Образец значения для колонки (для построения записи-примера)
+		function sampleValue(col: LocalColumn): unknown {
+			switch (col.type) {
+				case 'number':
+					return 1234.56;
+				case 'boolean':
+					return true;
+				case 'date':
+					return new Date().toISOString().slice(0, 10);
+				case 'datetime':
+					return new Date().toISOString();
+				case 'universal':
+					return { t: 'string', v: 'Пример' };
+				case 'paramslist':
+					return {};
+				case 'jsonb':
+					return { Пример: 'значение' };
+				default:
+					return 'Пример';
+			}
+		}
+
+		// Запись-пример: первая реальная запись целевой таблицы, иначе образец
+		let record: LocalRecord | null = null;
+		let lines: LocalLine[] = [];
+		if (targetTableId) {
+			const first = await db.data_records.where('table_id').equals(targetTableId).first();
+			if (first && !first.is_folder) {
+				record = first;
+				lines = await db.data_lines.where('record_id').equals(first.id).toArray();
+			}
+		}
+		if (!record) {
+			const data: Record<string, any> = {};
+			for (const col of columns) data[col.name] = sampleValue(col);
+			record = {
+				id: 'preview-sample',
+				table_id: targetTableId ?? '',
+				status: 'draft',
+				data,
+				is_dirty: 0,
+				updated_at: new Date().toISOString()
+			};
+			// Образцы строк ТЧ: 2 строки на каждую подтаблицу
+			lines = [];
+			for (const sub of subTables) {
+				const subCols = await db.meta_columns.where('table_id').equals(sub.id).toArray();
+				for (let i = 0; i < 2; i++) {
+					const lineData: Record<string, any> = {};
+					for (const c of subCols) lineData[c.name] = sampleValue(c);
+					lines.push({
+						id: `preview-line-${sub.id}-${i}`,
+						record_id: record.id,
+						table_id: sub.id,
+						data: lineData,
+						sort_order: i
+					});
+				}
+			}
+		}
+
+		const linkCache = new Map<string, string>();
+		async function resolveLink(id: string): Promise<string> {
+			if (linkCache.has(id)) return linkCache.get(id)!;
+			const rec = await db.data_records.get(id);
+			const name = rec?.data?.name || rec?.data?.number || rec?.data?.title || String(id || '');
+			linkCache.set(id, name);
+			return name;
+		}
+
+		let rendered: string;
+		let errorText = '';
+		try {
+			if (code.trim()) {
+				const subLines: Record<string, LocalLine[]> = {};
+				for (const t of subTables) {
+					if (t.name) subLines[t.name] = lines.filter((l) => l.table_id === t.id);
+				}
+				const result = await runActionCode(
+					code,
+					sandboxContext({
+						record,
+						records: [record],
+						lines,
+						subLines,
+						params: mergeParams(record),
+						db,
+						supabase,
+						save: saveRecordWithLines,
+						log: (...args) => console.log('[Предпросмотр]', ...args),
+						link: linkApi,
+						apiCall,
+						run: runAnotherTable,
+						flowLayout
+					})
+				);
+				if (typeof result === 'string' && result.trim()) {
+					rendered = result;
+				} else if (result && typeof result === 'object') {
+					rendered = await renderTemplate(templateHtml || FALLBACK_TEMPLATE, {
+						record,
+						tableTitle,
+						columns,
+						subTables,
+						lines,
+						resolveLink,
+						form: result as Record<string, any>
+					});
+				} else {
+					rendered = await renderTemplate(templateHtml || FALLBACK_TEMPLATE, {
+						record,
+						tableTitle,
+						columns,
+						subTables,
+						lines,
+						resolveLink
+					});
+				}
+			} else {
+				rendered = await renderTemplate(templateHtml || FALLBACK_TEMPLATE, {
+					record,
+					tableTitle,
+					columns,
+					subTables,
+					lines,
+					resolveLink
+				});
+			}
+		} catch (e: any) {
+			errorText = e?.message ?? String(e);
+			rendered = `<div style="color:#c00;font-family:sans-serif;padding:12px;border:1px solid #c00;border-radius:4px;margin:8px 0;"><b>Ошибка предпросмотра:</b> ${escapeHtml(
+				errorText
+			)}</div>`;
+		}
+
+		const html = buildPrintDocument(
+			`${tableTitle} — предпросмотр`,
+			`<div class="print-item">${rendered}</div>`
+		);
+		return {
+			html,
+			svg: format === 'svg' ? extractSvg(html) || undefined : undefined,
+			format,
+			error: errorText || undefined
+		};
+	},
+
+	/**
 	 * Универсальная печать одного или нескольких документов по их ID.
 	 * formId — конкретная печатная форма; если пусто — дефолтная (is_default)
 	 * или первая в порядке sort_order.

@@ -43,7 +43,7 @@ function norm(text: string): string {
 }
 
 // Извлечь текст и «строки таблицы» из файла PDF (StoredFile, base64).
-// Выполняется только в браузере (из importStatement по «▶️ Выполнить»).
+// Выполняется только в браузере (из сценария импорта по «▶️ Выполнить»/save).
 export async function extractPdfText(file: StoredFile): Promise<PdfTextResult> {
 	const pdfjsLib = await import('pdfjs-dist');
 	pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;

@@ -19,7 +19,7 @@
 	$effect(() => {
 		syncTableTypes();
 
-		// Хелперы модулей в песочнице (parsePdf, importStatement — лениво).
+		// Хелперы песочницы (parsePdf, runCode, parseNum/parseAmount/parseDate — лениво).
 		registerSandboxPlugins();
 
 		// Системные таблицы (например, «История») создаём до первой синхронизации,

@@ -261,9 +261,9 @@ class MetadataManager {
 		await this.ensureHistoryColumns(effectiveId, online);
 
 		// Модули ядра и по умолчанию: настройки (app_settings), печатные формы,
-		// сценарии (flow), уведомления/сообщения. Опциональные модули (банк,
-		// API-запросы, константы, расписания) boot НЕ создаёт — они включаются
-		// вручную (installModule) или живут как сценарии-данные.
+		// сценарии (flow), уведомления/сообщения. Опциональные модули (API-запросы,
+		// константы) boot НЕ создаёт — они включаются вручную (installModule)
+		// или живут как сценарии-данные.
 		for (const mod of [...CORE_MODULES, ...DEFAULT_MODULES]) {
 			await ensureModule(mod);
 		}

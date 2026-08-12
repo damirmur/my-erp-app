@@ -11,10 +11,10 @@ import { hydrateFilesInObject, externalizeFilesInObject } from '$lib/services/fi
 
 // Контекст, передаваемый в пользовательский код действия «Выполнить».
 // Доступно из кода: record, records, lines, params, db, supabase, save(), log(),
-// link, apiCall(), run(), flow(), importStatement(). В узлах сценария
+// link, apiCall(), run(), flow(). В узлах сценария
 // дополнительно: input (результат предыдущего узла), inputs (все входы по ролям).
-// Модульные хелперы (parsePdf, importStatement и т.д.) добавляются песочницей
-// (sandboxContext) — ядро их не знает.
+// Универсальные хелперы (parsePdf, runCode, parseNum и т.д.) добавляются
+// песочницей (sandboxContext) — ядро их не знает.
 export interface RunActionContext {
 	record: LocalRecord | null; // Текущая запись (в форме — открытая; в списке — первая выбранная)
 	records: LocalRecord[]; // Выбранные записи (в форме — [record])
@@ -32,7 +32,7 @@ export interface RunActionContext {
 	flow?: (recordId: string, params?: Record<string, any>) => Promise<unknown>; // Выполнить сценарий
 	subLines?: Record<string, LocalLine[]>; // В коде печатной формы: строки ТЧ по имени табличной части
 	flowLayout?: typeof flowLayout; // В коде печатной формы: раскладка графа сценария (волны/связи/циклы)
-	[key: string]: unknown; // Модульные хелперы песочницы (parsePdf, importStatement и т.д.)
+	[key: string]: unknown; // Универсальные хелперы песочницы (parsePdf, runCode, parseNum и т.д.)
 }
 
 // Выполнение JS-кода действия в браузере. Код — тело async-функции.

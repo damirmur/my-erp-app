@@ -2,10 +2,8 @@ import { ensureNotificationTables, seedNotificationDefaults } from '$lib/state/n
 import { ensureFlowTables } from '$lib/state/flows';
 import { ensurePrintFormsTable } from '$lib/state/printForms';
 import { ensureSettingsTable } from '$lib/state/settings';
-import { ensureBankStatementTables } from '$lib/state/bankStatements';
-import { ensureApiQueryTables, seedApiQueryDefaults } from '$lib/state/apiQueries';
+import { ensureApiQueryTables } from '$lib/state/apiQueries';
 import { ensureConstantsTable } from '$lib/state/constants';
-import { ensureSchedulerTables } from '$lib/state/scheduler';
 import { db } from '$lib/db/indexeddb';
 
 // Реестр модулей приложения. Модуль = группа таблиц + их идемпотентное создание
@@ -16,8 +14,7 @@ import { db } from '$lib/db/indexeddb';
 //   core     — движок, ставится всегда (история, настройки, печатные формы);
 //   default  — устанавливается по умолчанию при старте (сценарии, уведомления);
 //   optional — не ставится из boot, включается вручную (installModule) — модули,
-//              которые живут как сценарии-данные (банк, api-запросы, константы,
-//              расписания).
+//              которые живут как сценарии-данные (api-запросы, константы).
 //
 // Движок НЕ знает про конкретные таблицы модулей — каждый модуль сам описывает
 // свои ensure/seedDefaults. История (history) обрабатывается отдельно в
@@ -82,22 +79,12 @@ export const DEFAULT_MODULES: ModuleDef[] = [
 
 export const OPTIONAL_MODULES: ModuleDef[] = [
 	{
-		id: 'bank',
-		title: 'Банковские выписки',
-		description:
-			'Импорт выписок из PDF (банки, счета, выписки, операции). Переносится в сценарии-данные.',
-		group: 'optional',
-		tables: ['banks', 'bank_accounts', 'bank_statements', 'bank_statement_operations'],
-		ensure: ensureBankStatementTables
-	},
-	{
 		id: 'api_queries',
 		title: 'API-запросы',
 		description: 'Каталог готовых внешних вызовов по deep-link.',
 		group: 'optional',
 		tables: ['api_queries'],
-		ensure: ensureApiQueryTables,
-		seedDefaults: seedApiQueryDefaults
+		ensure: ensureApiQueryTables
 	},
 	{
 		id: 'constants',
@@ -107,14 +94,6 @@ export const OPTIONAL_MODULES: ModuleDef[] = [
 		group: 'optional',
 		tables: ['constants', 'constants_periods'],
 		ensure: ensureConstantsTable
-	},
-	{
-		id: 'schedules',
-		title: 'Расписания',
-		description: 'Периодическая рассылка (исполняет Go-сервер). Будет переделано.',
-		group: 'optional',
-		tables: ['schedules', 'schedule_recipients'],
-		ensure: ensureSchedulerTables
 	}
 ];
 

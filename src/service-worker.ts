@@ -27,7 +27,7 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
 	if (event.request.method !== 'GET') return;
 	const url = new URL(event.request.url);
-	// Кросс-доменные запросы (API-режим: wttr.in, Nominatim и т.п.) не перехватываем:
+	// Кросс-доменные запросы (внешние API из кода действий и т.п.) не перехватываем:
 	// браузер выполнит их напрямую с обычным CORS, а кэшировать их всё равно нельзя.
 	if (url.origin !== self.location.origin) return;
 

@@ -41,6 +41,7 @@ my-erp-app/
 │       │   ├── printer.ts          # Print forms engine (mustache-like {{}}, summary, preview)
 │       │   ├── deliver.ts          # «Отправить»: renders document → creates «Сообщение» (+attachment)
 │       │   ├── backup.ts           # Project export/import JSON (all 6 Supabase tables)
+│       │   ├── solutionPacks.ts    # Solution packs: validatePack/applySolution/exportSolution (+download/parse)
 │       │   ├── nameAuto.ts         # Field name from synonym (translate via api_services)
 │       │   └── numbers.ts          # Auto-fill date/number on save (year-scoped, strip non-digits)
 │       ├── state/
@@ -53,6 +54,7 @@ my-erp-app/
 │       │   ├── apiQueries.ts       # «API-запросы» catalog (api_queries)
 │       │   ├── flows.ts            # Сценарии (flow_scenarios/nodes/links/elements) + trigger columns
 │       │   ├── constants.ts        # «Константы» (constants + periods)
+│       │   ├── solutions.ts        # «Пакеты решений» (solution_packs) + APPLY_SOLUTION_RUN_CODE
 │       │   └── workspace.svelte.ts # Tab manager (Svelte 5 runes)
 │       ├── utils/
 │       │   └── ruFormat.ts         # parseRuNumber/parseRuAmount/parseRuDate (Russian number/date format)
@@ -285,8 +287,8 @@ Seeded idempotently by `ensureNotificationTables()` (called from `metadata.ensur
 The engine is **universal** — it knows no subject domain (banks, weather, astrology, schedules…). Everything concrete is **data**, not code. The seed (code) contains only what the engine needs to run or references **by name**:
 
 - **Runtime mechanics**: sandbox (`runActionCode`, `sandbox.ts`/`sandboxPlugins.ts`), `flowRunner`/`flowElements`/`triggers`, `printer`, `sync`, `deeplink`, `numbers`, `files`; field/table types (added by SQL migrations at deploy — new DBs get them automatically).
-- **System tables referenced by name**: `history`, `app_settings`, `print_forms` (registry — empty, concrete forms are data), `api_services` (only server-implemented services), `flow_scenarios`/`flow_nodes`/`flow_links`/`flow_elements` (tables; scenarios and catalog elements are data), `notify_channels`/`notify_messages` (+ТЧ), `constants`.
-- **Universal sandbox primitives** (`sandboxPlugins.ts`): `parsePdf` (PDF → text/rows), `runCode` (run a code string stored in data), `parseNum`/`parseAmount`/`parseDate` (`src/lib/utils/ruFormat.ts`). A primitive is added only if it serves the engine as a whole, not one domain.
+- **System tables referenced by name**: `history`, `app_settings`, `print_forms` (registry — empty, concrete forms are data), `api_services` (only server-implemented services), `flow_scenarios`/`flow_nodes`/`flow_links`/`flow_elements` (tables; scenarios and catalog elements are data), `notify_channels`/`notify_messages` (+ТЧ), `constants`, `solution_packs` (registry of data module packages, see below).
+- **Universal sandbox primitives** (`sandboxPlugins.ts`): `parsePdf` (PDF → text/rows), `runCode` (run a code string stored in data), `parseNum`/`parseAmount`/`parseDate` (`src/lib/utils/ruFormat.ts`), `applySolution`/`validateSolution` (apply/check a data package — see below). A primitive is added only if it serves the engine as a whole, not one domain.
 
 Everything else — tables, records, scenarios, print forms, example services — is **data**: delivered to a new DB by project backup (`exportProject`/`importProject`, «Работа с информационной базой») or built in the constructor. Seeds are **idempotent** (tables by `name` via `ensureTable`, columns only missing via `ensureColumns`, records only into an empty catalog via `seedRecord`+`hasServerRows`) and never delete existing rows.
 
@@ -295,6 +297,16 @@ Everything else — tables, records, scenarios, print forms, example services �
 A «Сценарий» record is an n8n-like graph: nodes and edges live in ТЧ `flow_nodes`/`flow_links`; the «Элементы сценария» catalog (`flow_elements`) holds reusable node configs (a node may override an element's params/service/code). `flowRunner.flowExecute` runs the graph **wave-based topologically**: a node fires when all its incoming edges are satisfied, ready nodes run in parallel (`Promise.all`), results accumulate into a `context` referenced via `${node_title}` / `${input}` / `${key}`. Node types (`flowElements.runFlowElement`): `constant`, `get`, `api`, `template`, `find`, `create`, `run`; a node with `code` runs it in the sandbox (context gains `input`/`inputs`/`params`), a node with `service` does a declarative `apiCall`. Returns `{ results, last, steps }` — per-node `steps` (ok/error/pending, error text, duration) shown in the «API» panel.
 
 **Scenario triggers** (`triggers.ts`): a scenario declares `trigger_table` + `trigger_event` (save/post/unpost/delete) and fires **synchronously after** the save commits (a trigger failure never rolls back the record). Every run is logged to «История»; recursion guard `isTriggerActive()` prevents saves made inside a trigger from re-firing. Use case: **«Импорт банковской выписки»** — a data scenario bound to `bank_statements` on save that imports operations from the attached PDF on universal primitives (`parsePdf` → `runCode(parser_code)` → normalize/dedup → find-or-create account → `save()`); an empty `params.record.file` returns `{ skipped: true }` and leaves ТЧ untouched.
+
+## Solution packs (data modules)
+
+**Solution packs** (`src/lib/services/solutionPacks.ts` + `src/lib/state/solutions.ts`) move a whole module between bases **entirely as data** — the engine still knows no domain. A pack is a JSON document (`my-erp-solution`/v1) describing the schema (tables/columns/ТЧ/table-type presets), catalogs (seed records), scenarios (graph), and print forms, applied idempotently **without code**.
+
+- **Registry**: system table `solution_packs` (type `template`, `hiddenInMain`, module `solutions` in core); each record's `definition` (jsonb) holds the pack. «▶️ Выполнить» = `config.runCode` → sandbox primitive `applySolution(record.data.definition, { dryRun })`; the report (`ApplyReport`) shows in the «API» panel. `dryRun=1` runs checks without writing.
+- **References** (resolved in two passes — tables first, then records): `@key` (a seed record), `@sys:table/name` (an existing base record), `@table:name` (a table id — for `trigger_table`/`target_table`/schema `relatedTable`), `@ln:key` (a ТЧ line of the current record; key = the line's `__id` — allocated for all lines before resolution, so links may point forward).
+- **Idempotency** (same primitives as seeds): tables by `name` (`ensureTable`), columns only missing (`ensureColumns`), types only if no `meta_table_types` row, records only if no `match`-field hit (default `data.name`); skipped records are still registered in `recordKeys` so `@key` refs resolve to their real ids. `scenarios`/`printForms` sections are converted to `RecordSeed`s (kind `scenario`/`printForm`) and run through the same pipeline (scenario nodes/links become ТЧ lines with `@ln:` edges).
+- **Reverse** (`exportSolution({ tableNames, id, title, includeRecords })`): reads the selected top-level tables (+ТЧ automatically) from the server and converts records into `seedRecords`, rewriting link/linelink/jsonb values that point into the scope as `@key`/`@ln:` and table refs as `@table:`; `includeRecords:false` exports schema only.
+- **UI** («Работа с информационной базой» → `InfoBaseConfigurator.svelte`): «📦 Экспорт пакета» (checkbox list of top-level tables → `downloadSolution`), «📦 Импорт пакета» (`parseSolutionFile` → `validatePack` → creates a registry record via `seedRecord` → optionally `applySolution` immediately).
 
 ## Print forms (`print_forms` + `printer.ts`)
 

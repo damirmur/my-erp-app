@@ -4,6 +4,7 @@ import { ensurePrintFormsTable } from '$lib/state/printForms';
 import { ensureSettingsTable } from '$lib/state/settings';
 import { ensureApiQueryTables } from '$lib/state/apiQueries';
 import { ensureConstantsTable } from '$lib/state/constants';
+import { ensureSolutionPacksTable } from '$lib/state/solutions';
 import { db } from '$lib/db/indexeddb';
 
 // Реестр модулей приложения. Модуль = группа таблиц + их идемпотентное создание
@@ -48,6 +49,15 @@ export const CORE_MODULES: ModuleDef[] = [
 		group: 'core',
 		tables: ['print_forms'],
 		ensure: ensurePrintFormsTable
+	},
+	{
+		id: 'solutions',
+		title: 'Пакеты решений',
+		description:
+			'Реестр пакетов решений: применение схемы (таблицы/колонки/типы), каталогов, сценариев и печатных форм из JSON-определения без кода.',
+		group: 'core',
+		tables: ['solution_packs'],
+		ensure: ensureSolutionPacksTable
 	}
 ];
 

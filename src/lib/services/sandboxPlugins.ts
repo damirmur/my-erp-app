@@ -32,4 +32,18 @@ export function registerSandboxPlugins(): void {
 	registerSandboxHelper('parseNum', () => parseRuNumber);
 	registerSandboxHelper('parseAmount', () => parseRuAmount);
 	registerSandboxHelper('parseDate', () => parseRuDate);
+
+	// Применение «пакета решений»: JSON-описание схемы (таблицы/колонки/типы),
+	// каталогов, сценариев и печатных форм — применяется идемпотентно без кода.
+	// Универсальный примитив: движок не знает ни про один конкретный модуль.
+	registerSandboxHelper('applySolution', () => async (pack: any, opts?: Record<string, any>) => {
+		const m = await import('$lib/services/solutionPacks');
+		return m.applySolution(pack, opts ?? {});
+	});
+
+	// Проверка пакета без записи в базу (ошибки/предупреждения).
+	registerSandboxHelper('validateSolution', () => async (pack: any) => {
+		const m = await import('$lib/services/solutionPacks');
+		return m.validatePack(pack);
+	});
 }

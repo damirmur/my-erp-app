@@ -312,8 +312,7 @@
 						{#if typeDef}
 							<div class="navorder-type-row">
 								<div class="navorder-type-title">
-									<span class="navorder-group-title"
-										>{groupTitle(typeDef.type, typeDef.label)}</span
+									<span class="navorder-group-title">{groupTitle(typeDef.type, typeDef.label)}</span
 									>
 									<div class="navorder-move">
 										<button
@@ -370,13 +369,13 @@
 						<button onclick={cancelNavOrder} class="type-btn">Отмена</button>
 					</div>
 					<div class="navorder-hint">
-						Галочка у таблицы — показ в основном режиме. Скрытые таблицы не пропадают из списка:
-						их видно и можно вернуть обратно.
+						Галочка у таблицы — показ в основном режиме. Скрытые таблицы не пропадают из списка: их
+						видно и можно вернуть обратно.
 					</div>
 				{:else}
 					<div class="navorder-hint">
-						Порядок групп и таблиц основного режима. Нажмите «✎», чтобы менять порядок и
-						видимость таблиц в основном меню.
+						Порядок групп и таблиц основного режима. Нажмите «✎», чтобы менять порядок и видимость
+						таблиц в основном меню.
 					</div>
 				{/if}
 			</div>

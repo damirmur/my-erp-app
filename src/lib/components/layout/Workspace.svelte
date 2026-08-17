@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { replaceState } from '$app/navigation';
 	import { workspace } from '$lib/state/workspace.svelte';
+	import { auth } from '$lib/state/auth.svelte';
 	import { syncService, clearAppStorage } from '$lib/services/sync';
 	import { db } from '$lib/db/indexeddb';
 	import { buildRecordUrl, buildListUrl } from '$lib/services/deeplink';
@@ -11,6 +12,7 @@
 	import InterfaceConfigurator from '../dynamic/InterfaceConfigurator.svelte';
 	import InfoBaseConfigurator from '../dynamic/InfoBaseConfigurator.svelte';
 	import TypesSectionForm from '../dynamic/TypesSectionForm.svelte';
+	import AccessConfigurator from '../dynamic/AccessConfigurator.svelte';
 
 	let syncing = $state(false);
 
@@ -29,7 +31,8 @@
 			tab.tableId !== 'SYSTEM_TYPE_CONFIGURATOR_ID' &&
 			tab.tableId !== 'SYSTEM_INTERFACE_CONFIGURATOR_ID' &&
 			tab.tableId !== 'SYSTEM_INFOBASE_CONFIGURATOR_ID' &&
-			tab.tableId !== 'SYSTEM_TYPES_SECTION_ID'
+			tab.tableId !== 'SYSTEM_TYPES_SECTION_ID' &&
+			tab.tableId !== 'SYSTEM_ACCESS_CONFIGURATOR_ID'
 		) {
 			replaceState(buildRecordUrl(tab.recordId), {});
 		}
@@ -134,6 +137,20 @@
 				</div>
 			{/each}
 		</div>
+
+		<div class="user-area">
+			{#if auth.isAuthenticated}
+				<span class="user-chip" title={auth.user?.email ?? ''}>
+					<span class="user-dot"></span>
+					{auth.displayName || 'Пользователь'}
+					{#if auth.role}<span class="user-role">({auth.role})</span>{/if}
+				</span>
+				<button class="logout-btn" onclick={() => auth.signOut()} title="Выйти">⎋</button>
+			{:else}
+				<span class="user-chip"><span class="user-dot user-dot-guest"></span>Гость</span>
+				<button class="logout-btn" onclick={() => (auth.showLogin = true)} title="Войти">🔐</button>
+			{/if}
+		</div>
 	</div>
 
 	<!-- 2. Контентная область окон. Все открытые вкладки держим в DOM (keep-alive):
@@ -158,6 +175,8 @@
 						<InfoBaseConfigurator />
 					{:else if tab.tableId === 'SYSTEM_TYPES_SECTION_ID'}
 						<TypesSectionForm />
+					{:else if tab.tableId === 'SYSTEM_ACCESS_CONFIGURATOR_ID'}
+						<AccessConfigurator />
 					{:else if tab.type === 'list'}
 						<DynamicList tableId={tab.tableId} tabId={tab.id} />
 					{:else if tab.type === 'form'}
@@ -243,6 +262,54 @@
 		gap: 4px;
 		overflow-x: auto;
 		flex: 1;
+	}
+	.user-area {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		flex-shrink: 0;
+		margin-left: 6px;
+	}
+	.user-chip {
+		display: flex;
+		align-items: center;
+		gap: 5px;
+		font-size: 0.8rem;
+		color: #475569;
+		background: #ffffff;
+		border: 1px solid #cbd5e1;
+		border-radius: 999px;
+		padding: 3px 10px;
+		white-space: nowrap;
+	}
+	.user-dot {
+		width: 8px;
+		height: 8px;
+		border-radius: 50%;
+		background: #22c55e;
+		flex-shrink: 0;
+	}
+	.user-dot-guest {
+		background: #94a3b8;
+	}
+	.user-role {
+		color: #94a3b8;
+		font-size: 0.7rem;
+	}
+	.logout-btn {
+		background: #ffffff;
+		border: 1px solid #cbd5e1;
+		border-radius: 0.25rem;
+		width: 28px;
+		height: 28px;
+		cursor: pointer;
+		color: #64748b;
+		font-size: 0.85rem;
+		flex-shrink: 0;
+	}
+	.logout-btn:hover {
+		background: #fee2e2;
+		color: #dc2626;
 	}
 	/* Стилизация вкладки в духе嚴форм 1С */
 	.tab-button {

@@ -8,6 +8,7 @@ import {
 	type ResolvedLink
 } from '$lib/services/deeplink';
 import { runRecordAction } from '$lib/services/actionRunner';
+import { auth } from '$lib/state/auth.svelte';
 import type { FlowStep } from '$lib/services/flowRunner';
 
 // Результат API-команды для панели «API»: либо данные записи/списка как JSON,
@@ -31,7 +32,17 @@ export async function runApiCommand(link: DeepLink): Promise<ApiCommandResult | 
 	const executedAt = new Date().toISOString();
 	try {
 		if (link.kind === 'execute') {
+			const record = await db.data_records.get(link.recordId);
 			const tableTitle = await recordTableTitle(link.recordId);
+			if (!record || !(await auth.canExecuteRecord(link.recordId))) {
+				return {
+					href: buildExecuteUrl(link.recordId, link.params),
+					label: `${tableTitle ?? 'запись'} · Выполнить API`,
+					ok: false,
+					error: 'Нет права на выполнение для этой записи.',
+					executedAt
+				};
+			}
 			const result = await runRecordAction(link.recordId, link.params);
 			return {
 				href: buildExecuteUrl(link.recordId, link.params),
@@ -50,6 +61,15 @@ export async function runApiCommand(link: DeepLink): Promise<ApiCommandResult | 
 		if (link.kind === 'recordJson') {
 			const resolved = await resolveLink({ kind: 'record', recordId: link.recordId });
 			if (!resolved || resolved.kind !== 'record') return null;
+			if (!auth.canViewTable(resolved.table.id)) {
+				return {
+					href: buildRecordJsonUrl(link.recordId),
+					label: `${resolved.table.title} · данные (JSON)`,
+					ok: false,
+					error: 'Нет права на просмотр этой записи.',
+					executedAt
+				};
+			}
 			return {
 				href: buildRecordJsonUrl(link.recordId),
 				label: `${resolved.table.title} №${recordNumber(resolved.record.data)} · данные (JSON)`,
@@ -62,6 +82,15 @@ export async function runApiCommand(link: DeepLink): Promise<ApiCommandResult | 
 		if (link.kind === 'listJson') {
 			const resolved = await resolveLink({ kind: 'list', tableId: link.tableId });
 			if (!resolved || resolved.kind !== 'list') return null;
+			if (!auth.canViewTable(resolved.table.id)) {
+				return {
+					href: buildListJsonUrl(link.tableId),
+					label: `${resolved.table.title} · список (JSON)`,
+					ok: false,
+					error: 'Нет права на просмотр этой таблицы.',
+					executedAt
+				};
+			}
 			return {
 				href: buildListJsonUrl(link.tableId),
 				label: `${resolved.table.title} · список (JSON)`,

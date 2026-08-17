@@ -182,7 +182,9 @@
 							{/each}
 						</select>
 						<div class="create-type-actions">
-							<button onclick={handleCreateType} class="type-btn type-btn-primary">Создать тип</button>
+							<button onclick={handleCreateType} class="type-btn type-btn-primary"
+								>Создать тип</button
+							>
 							<button
 								onclick={() => {
 									creatingType = false;
@@ -203,8 +205,7 @@
 							<span class="type-count">{tablesByType[t.type]?.length ?? 0}</span>
 							<button
 								class="row-edit-btn"
-								onclick={() =>
-									workspace.openTypeConfigurator(t.type, groupTitle(t.type, t.label))}
+								onclick={() => workspace.openTypeConfigurator(t.type, groupTitle(t.type, t.label))}
 								title="Предустановки типа">✎</button
 							>
 							<button

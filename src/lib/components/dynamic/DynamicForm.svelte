@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { db, type LocalColumn, type LocalTable, type LocalLine } from '$lib/db/indexeddb';
 	import { workspace } from '$lib/state/workspace.svelte';
+	import { auth } from '$lib/state/auth.svelte';
 	import { printerService } from '$lib/services/printer';
 	import { deliverService } from '$lib/services/deliver';
 	import { autoFillDocumentFields, todayIso } from '$lib/services/numbers';
@@ -66,9 +67,12 @@
 	let tableConfig = $derived(tableMeta?.config ?? {});
 	// Иерархия (группы/папки): фича типа/таблицы — показываем поле «Группа» в шапке
 	let isHierarchical = $derived(getEffectiveConfig(tableMeta).features.hierarchy);
-	// Системные таблицы (например, «История») открываются только для просмотра
+	// Системные таблицы (например, «История») открываются только для просмотра.
+	// Права доступа: без права «Изменение» на таблицу — только просмотр.
 	let readOnly = $derived(
-		tableType === 'system' || isReadOnly(tableType, recordStatus, tableConfig)
+		tableType === 'system' ||
+			isReadOnly(tableType, recordStatus, tableConfig) ||
+			!auth.canEditTable(tableId)
 	);
 	let isConstant = $derived(tableType === 'constant');
 	let isPeriodic = $derived(tableConfig.periodic === true && isConstant);

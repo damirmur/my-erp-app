@@ -5,6 +5,7 @@ import { ensureSettingsTable } from '$lib/state/settings';
 import { ensureApiQueryTables } from '$lib/state/apiQueries';
 import { ensureConstantsTable } from '$lib/state/constants';
 import { ensureSolutionPacksTable } from '$lib/state/solutions';
+import { ensureAccessTables } from '$lib/state/access';
 import { db } from '$lib/db/indexeddb';
 
 // Реестр модулей приложения. Модуль = группа таблиц + их идемпотентное создание
@@ -58,6 +59,15 @@ export const CORE_MODULES: ModuleDef[] = [
 		group: 'core',
 		tables: ['solution_packs'],
 		ensure: ensureSolutionPacksTable
+	},
+	{
+		id: 'access',
+		title: 'Доступ',
+		description:
+			'Авторизация: «Роли», «Команда» (участники и роли), «Правила доступа» (кто x что x действие), режим защиты.',
+		group: 'core',
+		tables: ['access_roles', 'team_members', 'access_rules'],
+		ensure: ensureAccessTables
 	}
 ];
 

@@ -426,6 +426,24 @@ class WorkspaceManager {
 		this.activeTabId = tabId;
 	}
 
+	// 8e. Открыть вкладку «Доступ и команда» (роли, участники, правила доступа).
+	openAccessConfigurator() {
+		const tabId = 'form_SYSTEM_ACCESS_CONFIGURATOR_ID';
+		const existing = this.tabs.find((t) => t.id === tabId);
+		if (existing) {
+			this.activeTabId = tabId;
+			return;
+		}
+		this.tabs.push({
+			id: tabId,
+			type: 'form',
+			tableId: 'SYSTEM_ACCESS_CONFIGURATOR_ID',
+			title: '🔐 Доступ и команда',
+			isDirty: false
+		});
+		this.activeTabId = tabId;
+	}
+
 	// 8d. Открыть вкладку «Работа с типами таблиц» (список, создание, удаление типов).
 	openTypesSection() {
 		const tabId = 'form_SYSTEM_TYPES_SECTION_ID';

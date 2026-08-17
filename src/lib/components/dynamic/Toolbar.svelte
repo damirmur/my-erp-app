@@ -2,6 +2,7 @@
 	import { db, type LocalColumn, type LocalTable } from '$lib/db/indexeddb';
 	import { getTableType, getActions, getStatusDef } from '$lib/table-types';
 	import { liveQuery } from 'dexie';
+	import { auth } from '$lib/state/auth.svelte';
 
 	let {
 		mode = 'list',
@@ -76,9 +77,34 @@
 	// печатная форма: 1 форма → прямая печать, несколько → выпадающий список.
 	let printActionVisible = $derived(hasPrintForms);
 
-	// Остальные кнопки (кроме print) — из фич типа таблицы.
+	// Права на таблицу: изменяющие действия скрыты без права редактирования,
+	// «Выполнить» требует права на выполнение (доступно и редакторам).
+	let canEdit = $derived(auth.canEditTable(tableId));
+	let canExecute = $derived(auth.canExecuteTable(tableId));
+
+	// Действия, меняющие данные: требуют права на изменение таблицы.
+	const MUTATING_ACTIONS = new Set([
+		'create',
+		'createFolder',
+		'save',
+		'post',
+		'unpost',
+		'markDelete',
+		'unmarkDelete',
+		'copy',
+		'massPost',
+		'massDelete',
+		'massRestore',
+		'purgeMarked',
+		'delete'
+	]);
+
+	// Остальные кнопки (кроме print) — из фич типа таблицы. Изменяющие действия
+	// скрыты без права на редактирование, «Выполнить» — без права на выполнение.
 	let actions = $derived(
-		getActions(tableTypeName, mode, tableConfig).filter((a) => a.id !== 'print')
+		getActions(tableTypeName, mode, tableConfig)
+			.filter((a) => a.id !== 'print')
+			.filter((a) => (a.id === 'run' ? canExecute : !MUTATING_ACTIONS.has(a.id) || canEdit))
 	);
 
 	let currentStatusDef = $derived(getStatusDef(tableTypeName, status));

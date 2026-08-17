@@ -138,7 +138,19 @@ export async function seedRecord(record: LocalRecord, online: boolean): Promise<
 	await db.data_records.put(record);
 	if (online) {
 		try {
-			await supabase.from('data_records').upsert(record);
+			// Отправляем только колонки, существующие на сервере: локальные служебные
+			// поля (is_dirty и т.п.) PostgREST не знает и отвечает 400 (PGRST204).
+			// Запись всё равно уедет при ближайшем синке через pushLocalChanges,
+			// если останется is_dirty=1.
+			await supabase.from('data_records').upsert({
+				id: record.id,
+				table_id: record.table_id,
+				status: record.status,
+				data: record.data ?? {},
+				updated_at: record.updated_at ?? new Date().toISOString(),
+				is_folder: record.is_folder ?? false,
+				parent_id: record.parent_id ?? null
+			});
 		} catch {
 			// сервер недоступен — запись уедет при ближайшем синке
 		}

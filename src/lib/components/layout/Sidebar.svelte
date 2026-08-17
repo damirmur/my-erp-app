@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { db, type LocalTable } from '$lib/db/indexeddb';
 	import { workspace } from '$lib/state/workspace.svelte';
+	import { auth } from '$lib/state/auth.svelte';
 	import { metadata } from '$lib/state/metadata';
 	import { syncService } from '$lib/services/sync';
 	import { liveQuery } from 'dexie';
@@ -122,11 +123,12 @@
 		}
 	}
 
-	// Те же группы, но без скрытых таблиц (для основного режима)
+	// Те же группы, но без скрытых и недоступных таблиц (для основного режима)
 	let mainModeTablesByType = $derived.by(() => {
 		const map: Record<string, LocalTable[]> = {};
 		tables.forEach((table) => {
 			if (!isVisibleInMain(table)) return;
+			if (!auth.canViewTable(table.id)) return;
 			(map[table.type] ??= []).push(table);
 		});
 		return map;
@@ -322,7 +324,12 @@
 					Основной режим
 				</button>
 				<button
-					onclick={() => workspace.setMode('constructor')}
+					onclick={() =>
+						auth.isAdmin
+							? workspace.setMode('constructor')
+							: auth.isGuest
+								? (auth.showLogin = true)
+								: alert('Конструктор доступен только владельцу или администратору.')}
 					class="mode-btn"
 					class:active={workspace.mode === 'constructor'}
 				>
@@ -372,7 +379,7 @@
 					</div>
 				{/if}
 
-				{#if workspace.mode === 'main' && historyTable}
+				{#if workspace.mode === 'main' && historyTable && (auth.accessMode === 'open' || auth.isAdmin)}
 					<div class="history-section">
 						<div class="group-header-row">
 							<button
@@ -423,6 +430,14 @@
 							title="Список, создание и удаление типов таблиц"
 						>
 							🗂 Работа с типами таблиц
+						</button>
+						<button
+							class="menu-command-btn"
+							class:active={workspace.activeTab?.tableId === 'SYSTEM_ACCESS_CONFIGURATOR_ID'}
+							onclick={() => workspace.openAccessConfigurator()}
+							title="Роли, команда, правила доступа, режим защиты"
+						>
+							🔐 Доступ и команда
 						</button>
 					</div>
 				{/if}

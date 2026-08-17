@@ -9,6 +9,7 @@ import {
 } from '$lib/state/metadata';
 import { CORE_MODULES, DEFAULT_MODULES, seedModule } from '$lib/state/modules';
 import { externalizeFilesInObject } from '$lib/services/files';
+import { auth } from '$lib/state/auth.svelte';
 
 // Ключ в localStorage: максимальная серверная updated_at из последнего pull.
 // Не зависит от локальных записей, поэтому сиды/история не могут сдвинуть
@@ -358,6 +359,8 @@ export const syncService = {
 			return;
 		}
 
+		if (auth.status === 'loading') return;
+
 		running = true;
 		console.log('Запуск процесса синхронизации...');
 		try {
@@ -366,6 +369,9 @@ export const syncService = {
 			await metadata.ensureSystemTables();
 			await this.pullMetadata(); // Сначала конфигурация
 			await this.pushLocalChanges(); // Затем отдаем свои изменения
+			// Сменился пользователь/права? Чистим кэш и перекачиваем под новыми
+			// правами (RLS отдаст только доступное текущему пользователю).
+			await auth.ensureDataCacheScope();
 			await this.pullDataChanges(); // В конце забираем чужие изменения
 			// Сиды справочников — только после загрузки данных, иначе их свежие
 			// updated_at сдвинут вотермарк pullDataChanges и серверные записи не
@@ -377,6 +383,8 @@ export const syncService = {
 			// Серверная история не должна расти бесконечно (локально она и так
 			// ограничена 50 записями) — чистим старые записи.
 			await capServerHistory();
+			// Эффективные права для UI (скрытие таблиц, readOnly) — после синка.
+			await auth.recomputeAccess();
 			console.log('Синхронизация завершена.');
 		} finally {
 			running = false;

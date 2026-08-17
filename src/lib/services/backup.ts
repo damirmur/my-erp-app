@@ -76,7 +76,10 @@ async function clearTable(table: string): Promise<void> {
 		const { error: delError } = await supabase
 			.from(table)
 			.delete()
-			.in('id', data.map((r) => r.id));
+			.in(
+				'id',
+				data.map((r) => r.id)
+			);
 		if (delError) throw new Error(`Ошибка очистки ${table}: ${delError.message}`);
 		if (data.length < SERVER_PAGE_SIZE) break;
 	}
@@ -93,9 +96,7 @@ async function insertChunked(table: string, rows: any[]): Promise<void> {
 
 // Полная выгрузка проекта в JSON-объект. includeSystem=false исключает
 // системные таблицы (сиды) и их данные — только пользовательская структура.
-export async function exportProject(
-	includeSystem = true
-): Promise<ProjectBackup> {
+export async function exportProject(includeSystem = true): Promise<ProjectBackup> {
 	const exclude = includeSystem ? new Set<string>() : new Set(systemTableNames());
 	const excludedTables = new Set<string>();
 
@@ -118,9 +119,7 @@ export async function exportProject(
 	const dataLines = (await fetchAll('data_lines')).filter(
 		(l) => !excludedIds.includes(l.table_id) && keptRecordIds.has(l.record_id)
 	);
-	const dataFiles = (await fetchAll('data_files')).filter(
-		(f) => keptRecordIds.has(f.record_id)
-	);
+	const dataFiles = (await fetchAll('data_files')).filter((f) => keptRecordIds.has(f.record_id));
 
 	return {
 		format: BACKUP_FORMAT,
@@ -143,7 +142,9 @@ export async function importProject(backup: ProjectBackup): Promise<ImportReport
 		throw new Error('Неверный формат файла выгрузки.');
 	}
 	if (backup.version !== BACKUP_VERSION) {
-		throw new Error(`Несовместимая версия выгрузки: ${backup.version}. Ожидается ${BACKUP_VERSION}.`);
+		throw new Error(
+			`Несовместимая версия выгрузки: ${backup.version}. Ожидается ${BACKUP_VERSION}.`
+		);
 	}
 
 	await clearTable('data_files');

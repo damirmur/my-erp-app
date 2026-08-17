@@ -18,6 +18,7 @@
 		fullUrlFor
 	} from '$lib/services/deeplink';
 	import { liveQuery } from 'dexie';
+	import { auth } from '$lib/state/auth.svelte';
 	import Toolbar from './Toolbar.svelte';
 	import './erpTable.css';
 
@@ -57,6 +58,8 @@
 	let tableType = $derived(tableMeta?.type ?? 'document');
 	let tableTypeDef = $derived(getTableType(tableType));
 	let isHierarchical = $derived(getEffectiveConfig(tableMeta).features.hierarchy);
+	// Права на таблицу: без права редактирования скрываем создание/изменение.
+	let canEdit = $derived(auth.canEditTable(tableId));
 
 	// Дебаунс поиска: задержка 150 мс; при изменении запроса сбрасываем порцию.
 	let searchTimer: ReturnType<typeof setTimeout> | undefined;
@@ -111,6 +114,7 @@
 		if (workspace.isConstantAutoOpenSuppressed(tableId)) return;
 		if (!tableMeta || loading) return;
 		if (records.length === 0) {
+			if (!canEdit) return;
 			db.data_records.put({
 				id: crypto.randomUUID(),
 				table_id: tableId,
@@ -805,11 +809,16 @@
 				>
 				{#if currentFolderId}
 					<button onclick={handleMoveUp} class="btn-move-up">⬆️ На уровень вверх</button>
-					<button onclick={handleCreateFolder} class="btn-add-folder">📁 Создать подгруппу</button>
+					{#if canEdit}
+						<button onclick={handleCreateFolder} class="btn-add-folder">📁 Создать подгруппу</button
+						>
+					{/if}
 				{:else}
-					<button onclick={handleCreateFolder} class="btn-add-folder"
-						>📁 Создать группу (папку)</button
-					>
+					{#if canEdit}
+						<button onclick={handleCreateFolder} class="btn-add-folder"
+							>📁 Создать группу (папку)</button
+						>
+					{/if}
 				{/if}
 			{/if}
 			<div class="hierarchy-view-toggle">
@@ -954,17 +963,19 @@
 													Открыть
 												</button>
 												{#if record.is_folder}
-													<button
-														type="button"
-														class="row-menu-item"
-														onclick={(e) => {
-															e.stopPropagation();
-															openMenuId = null;
-															handleRenameFolder(record);
-														}}
-													>
-														✏️ Переименовать группу
-													</button>
+													{#if canEdit}
+														<button
+															type="button"
+															class="row-menu-item"
+															onclick={(e) => {
+																e.stopPropagation();
+																openMenuId = null;
+																handleRenameFolder(record);
+															}}
+														>
+															✏️ Переименовать группу
+														</button>
+													{/if}
 												{/if}
 												{#if !record.is_folder && tableType !== 'system'}
 													<button
@@ -979,7 +990,7 @@
 														🔗 Копировать ссылку
 													</button>
 												{/if}
-												{#if !record.is_folder && tableTypeDef.statuses.some((s) => s.role === 'posted') && record.status !== 'posted'}
+												{#if !record.is_folder && tableTypeDef.statuses.some((s) => s.role === 'posted') && record.status !== 'posted' && canEdit}
 													<button
 														type="button"
 														class="row-menu-item"
@@ -992,7 +1003,7 @@
 														🟢 Провести
 													</button>
 												{/if}
-												{#if !record.is_folder && tableTypeDef.statuses.some((s) => s.role === 'deleted') && record.status !== 'marked_for_deletion'}
+												{#if !record.is_folder && tableTypeDef.statuses.some((s) => s.role === 'deleted') && record.status !== 'marked_for_deletion' && canEdit}
 													<button
 														type="button"
 														class="row-menu-item"
@@ -1005,7 +1016,7 @@
 														🗑 Пометить на удаление
 													</button>
 												{/if}
-												{#if !record.is_folder && record.status === 'marked_for_deletion'}
+												{#if !record.is_folder && record.status === 'marked_for_deletion' && canEdit}
 													<button
 														type="button"
 														class="row-menu-item"

@@ -77,7 +77,11 @@ export async function autoFillDocumentFields(
 	const hasNumber = names.has('number');
 	if (!hasDate && !hasNumber) return out;
 
-	if (hasDate && !out.date) out.date = todayIso();
+	if (hasDate && !out.date) {
+		// datetime-колонки — полноценный ISO (дата+время, UTC); иначе — только дата.
+		const colType = cols.find((c) => c.name === 'date')?.type;
+		out.date = colType === 'datetime' ? new Date().toISOString() : todayIso();
+	}
 
 	if (hasNumber && !out.number) {
 		const isDocument = table.type === 'document';

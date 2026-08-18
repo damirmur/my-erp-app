@@ -686,11 +686,15 @@
 	let previewError = $state('');
 	let previewBusy = $state(false);
 
-	// Колонки сетки: у печатной формы шаблон рендерится внизу отдельной вкладкой
+	// Колонки сетки: у печатной формы шаблон рендерится внизу отдельной вкладкой;
+	// поле «Описание» (если есть) тоже выносится из сетки в самый низ формы.
 	let gridColumns = $derived(
-		isPrintForm ? columns.filter((c) => c.name !== 'template_html') : columns
+		columns.filter((c) => c.name !== 'description' && (!isPrintForm || c.name !== 'template_html'))
 	);
 	let templateCol = $derived(columns.find((c) => c.name === 'template_html') ?? null);
+	// «Описание» (по имени колонки, если она есть в таблице) — рендерится внизу
+	// формы, высота по содержимому (autogrow).
+	let descriptionCol = $derived(columns.find((c) => c.name === 'description') ?? null);
 
 	function switchTemplateTab(tab: 'editor' | 'preview') {
 		templateTab = tab;
@@ -888,6 +892,23 @@
 					{/if}
 				</div>
 			{/if}
+
+			{#if descriptionCol}
+				{@const FC = fieldRegistry[descriptionCol.type]?.FormField}
+				<div class="form-field wide description-pane">
+					<label for={descriptionCol.id}>{descriptionCol.title}</label>
+					{#if FC}
+						<FC
+							bind:value={recordData[descriptionCol.name]}
+							disabled={readOnly}
+							onChange={markAsDirty}
+							relatedTableId={descriptionCol.related_table_id ?? ''}
+							{recordId}
+							autogrow
+						/>
+					{/if}
+				</div>
+			{/if}
 		</div>
 
 		{#if objectSubTables.length > 0 && !isConstant}
@@ -940,6 +961,14 @@
 	.form-field:not(.wide) :global(select) {
 		flex: 1;
 		min-width: 0;
+	}
+	.description-pane {
+		margin-top: 1.5rem;
+		border-top: 1px solid #e2e8f0;
+		padding-top: 0.75rem;
+	}
+	.description-pane :global(.textarea-field) {
+		min-height: 40px;
 	}
 	.form-field :global(input),
 	.form-field :global(textarea),

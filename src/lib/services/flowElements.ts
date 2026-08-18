@@ -45,7 +45,13 @@ export const FLOW_ELEMENTS: FlowElementDef[] = [
 		icon: '🏃',
 		hint: '{ "table": "…", "record": "${id}" }'
 	},
-	{ type: 'code', label: 'Код', icon: '🧩', hint: 'Произвольный JS (колонка «Код узла»)' }
+	{ type: 'code', label: 'Код', icon: '🧩', hint: 'Произвольный JS (колонка «Код узла»)' },
+	{
+		type: 'agent',
+		label: 'ИИ-агент',
+		icon: '🤖',
+		hint: '{ "model": "…", "prompt": "…", "data": {…} }'
+	}
 ];
 
 // Реестр внешних элементов (модули: банк, импорт и т.д.). Движок их не знает,
@@ -468,6 +474,92 @@ async function elementRun({
 	return await runAnotherTable(tableName, recordId);
 }
 
+// Резолв модели: id строки ТЧ каталога «Модели» (providers_llm → models, поле data.id
+// = имя модели для API) либо имя модели напрямую.
+async function resolveModel(model: unknown): Promise<string> {
+	const m = String(model ?? '').trim();
+	if (!m) throw new Error('Узел «ИИ-агент»: укажите model (имя или строка каталога «Модели»)');
+	const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+	if (uuid.test(m)) {
+		let line = await db.data_lines.get(m);
+		if (!line) {
+			try {
+				const { data } = await supabase.from('data_lines').select('data').eq('id', m).maybeSingle();
+				if (data) line = data as any;
+			} catch {
+				// сервер недоступен — работаем по кэшу
+			}
+		}
+		if (line) {
+			const name = line.data?.id ?? line.data?.name ?? line.data?.model;
+			if (name) return String(name);
+		}
+	}
+	return m;
+}
+
+// Элемент «ИИ-агент»: OpenAI-совместимый chat/completions (routerai.ru и др.).
+// Параметры:
+//   model  — имя модели или id строки ТЧ «Модели» провайдера (data.id);
+//   prompt — текст запроса (с ${...} подстановками, ${input} — вход узла);
+//   data   — входные данные (JSON): если задан, присоединяется к prompt;
+//            если нет — в качестве данных берётся вход узла (если prompt без ${input});
+//   system — опциональный системный промпт;
+//   temperature / max_tokens — опции вызова.
+// Сервис (node.data.service): OpenAI-совместимый endpoint (base_url заканчивается
+// на /chat/completions), авторизация api_key (для routerai — "Bearer <ключ>" в auth_type=header).
+async function elementAgent({
+	node,
+	input,
+	params,
+	scenarioParams,
+	apiCall
+}: FlowElementInput): Promise<unknown> {
+	const serviceId = node.data?.service ? String(node.data.service) : '';
+	if (!serviceId) throw new Error('Узел «ИИ-агент»: укажите Сервис API');
+	const service = await db.data_records.get(serviceId);
+	if (!service) throw new Error('Узел «ИИ-агент»: сервис не найден');
+
+	const ctx = subContext(input, scenarioParams);
+	const p = substitute(params, ctx);
+	const model = await resolveModel(p.model);
+
+	// Точка вызова: если у сервиса base_url без /chat/completions — дополняем.
+	let url = String(service.data?.base_url ?? '').replace(/\/+$/, '');
+	if (!url) throw new Error('Узел «ИИ-агент»: у сервиса не задан base_url');
+	if (!url.endsWith('/chat/completions')) url += '/chat/completions';
+	const svc = { ...service, data: { ...service.data, base_url: url } };
+
+	const system = p.system ? String(p.system) : '';
+	let content = String(p.prompt ?? '');
+	const hasData = p.data !== undefined && p.data !== null && p.data !== '';
+	if (hasData) {
+		content += '\n\n' + (typeof p.data === 'string' ? p.data : JSON.stringify(p.data, null, 2));
+	}
+	if (!content && input != null) {
+		content = typeof input === 'string' ? String(input) : JSON.stringify(input, null, 2);
+	}
+	if (!content.trim()) throw new Error('Узел «ИИ-агент»: задайте prompt или data');
+
+	const messages: { role: string; content: string }[] = [];
+	if (system) messages.push({ role: 'system', content: system });
+	messages.push({ role: 'user', content });
+
+	const body: Record<string, any> = { model, messages };
+	if (p.temperature != null) body.temperature = Number(p.temperature);
+	if (p.max_tokens != null) body.max_tokens = Number(p.max_tokens);
+
+	const res = await apiCall(svc, {}, body);
+	if (!res.ok) {
+		throw new Error(`Узел «ИИ-агент»: HTTP ${res.status}: ${String(res.raw).slice(0, 300)}`);
+	}
+	const answer = res.data?.choices?.[0]?.message?.content;
+	if (answer == null) {
+		throw new Error('Узел «ИИ-агент»: пустой ответ модели');
+	}
+	return answer;
+}
+
 // Запуск элемента по типу узла. Сначала встроенные, затем внешние (модули).
 // Неизвестный тип — просто прокладывает вход.
 export async function runFlowElement(type: string, e: FlowElementInput): Promise<unknown> {
@@ -486,6 +578,8 @@ export async function runFlowElement(type: string, e: FlowElementInput): Promise
 			return elementCreate(e);
 		case 'run':
 			return elementRun(e);
+		case 'agent':
+			return elementAgent(e);
 		default: {
 			const ext = externalElements.get(type);
 			if (ext) return ext.handler(e);

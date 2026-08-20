@@ -33,6 +33,20 @@ export function registerSandboxPlugins(): void {
 	registerSandboxHelper('parseAmount', () => parseRuAmount);
 	registerSandboxHelper('parseDate', () => parseRuDate);
 
+	// Рендер mermaid-диаграммы в статичный <svg>. Универсальный примитив:
+	// текст-определение → строка <svg>, которую можно встроить в HTML печатной
+	// формы. Библиотека грузится лениво — только при первом обращении.
+	registerSandboxHelper('mermaid', () => async (definition: string, opts?: { theme?: string }) => {
+		const mod: any = await import('mermaid');
+		const mermaid = mod.default ?? mod;
+		mermaid.initialize?.({ startOnLoad: false, theme: opts?.theme ?? 'default' });
+		const { svg } = await mermaid.render(
+			`mmd-${Math.random().toString(36).slice(2, 10)}-${Date.now()}`,
+			definition
+		);
+		return svg;
+	});
+
 	// Применение «пакета решений»: JSON-описание схемы (таблицы/колонки/типы),
 	// каталогов, сценариев и печатных форм — применяется идемпотентно без кода.
 	// Универсальный примитив: движок не знает ни про один конкретный модуль.

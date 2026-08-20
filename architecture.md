@@ -36,7 +36,7 @@ my-erp-app/
 │       │   ├── apiCommand.ts       # API-mode execution (#/...{...}.json → workspace.apiResult)
 │       │   ├── flowRunner.ts       # Scenario graph executor (wave-based topological run)
 │       │   ├── flowElements.ts     # Node types catalog (constant/get/api/template/find/create/run)
-│       │   ├── flowLayout.ts       # SVG layout of a scenario graph (print form «Сценарий»)
+│       │   ├── flowLayout.ts       # Waves/cycles of a scenario graph (mermaid print form «Сценарий»)
 │       │   ├── triggers.ts         # Scenario triggers by table event (save/post/unpost/delete)
 │       │   ├── printer.ts          # Print forms engine (mustache-like {{}}, summary, preview)
 │       │   ├── deliver.ts          # «Отправить»: renders document → creates «Сообщение» (+attachment)
@@ -310,7 +310,7 @@ A «Сценарий» record is an n8n-like graph: nodes and edges live in ТЧ
 
 ## Print forms (`print_forms` + `printer.ts`)
 
-«Печатные формы» is a registry (`print_forms`, type `template`, edited in constructor): each record = `target_table` + `template_html` + optional fill `code` (sandbox) + `delivery` ways (print/screen/send/download) + `output_format` html|svg + `summary`. The 🖨️ «Вывод» button is a **delivery menu** (0 forms → hidden; several forms → «форма → способы» submenu). `printerService.renderRecords` renders via a mustache-like engine (`{{doc.field}}`, `{{#each <ТЧ>}}`, `{{sum:}}`, `{{count:}}`, `{{form.*}}` — innermost `{{#each}}` blocks first); the `code` may return an HTML string used as-is or a data object rendered by the template (`output_format='svg'` extracts the `<svg>`). «Отправить» (`deliver.ts`) renders the document and creates a «Сообщение» with a text summary and the source attached (html/svg — the extension tells the gateway how to deliver). `previewTemplate` shows a live preview inside the constructor editor.
+«Печатные формы» is a registry (`print_forms`, type `template`, edited in constructor): each record = `target_table` + `template_html` + optional fill `code` (sandbox) + `delivery` ways (print/screen/send/download) + `output_format` html|svg + `summary`. The 🖨️ «Вывод» button is a **delivery menu** (0 forms → hidden; several forms → «форма → способы» submenu). `printerService.renderRecords` renders via a mustache-like engine (`{{doc.field}}`, `{{#each <ТЧ>}}`, `{{sum:}}`, `{{count:}}`, `{{form.*}}` — innermost `{{#each}}` blocks first); the `code` may return an HTML string used as-is or a data object rendered by the template (`output_format='svg'` extracts the `<svg>`). The sandbox provides a universal `mermaid` primitive (lazy `import('mermaid')`, mermaid text → static `<svg>`, used by the «Сценарий» print form instead of the old hand-built SVG generator). «Отправить» (`deliver.ts`) renders the document and creates a «Сообщение» with a text summary and the source attached (html/svg — the extension tells the gateway how to deliver). `previewTemplate` shows a live preview inside the constructor editor.
 
 ---
 

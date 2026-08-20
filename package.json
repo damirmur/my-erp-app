@@ -27,6 +27,7 @@
 	"dependencies": {
 		"@supabase/supabase-js": "^2.111.0",
 		"dexie": "^4.4.4",
+		"mermaid": "^11.17.0",
 		"pdfjs-dist": "^6.2.108"
 	}
 }

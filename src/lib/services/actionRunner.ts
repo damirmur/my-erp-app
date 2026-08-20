@@ -32,7 +32,7 @@ export interface RunActionContext {
 	flow?: (recordId: string, params?: Record<string, any>) => Promise<unknown>; // Выполнить сценарий
 	subLines?: Record<string, LocalLine[]>; // В коде печатной формы: строки ТЧ по имени табличной части
 	flowLayout?: typeof flowLayout; // В коде печатной формы: раскладка графа сценария (волны/связи/циклы)
-	[key: string]: unknown; // Универсальные хелперы песочницы (parsePdf, runCode, parseNum и т.д.)
+	[key: string]: unknown; // Универсальные хелперы песочницы (parsePdf, runCode, parseNum, mermaid и т.д.)
 }
 
 // Выполнение JS-кода действия в браузере. Код — тело async-функции.

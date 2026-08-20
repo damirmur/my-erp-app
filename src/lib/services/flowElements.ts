@@ -176,6 +176,38 @@ function withTimeout<T>(prom: PromiseLike<T>, ms: number): Promise<T> {
 	]);
 }
 
+// Универсальный ретрай для элементов сценария: повторяет fn, пока она бросает,
+// с нарастающей паузой delay * attempt. attempts=1 — без повторов. Механика
+// принадлежит движку; включение/настройка для конкретного элемента — данные
+// (параметры узла retry / retryDelay), т.к. повтор неидемпотентного вызова
+// небезопасен по умолчанию. Итоговая ошибка при попытках > 1 помечается числом.
+async function withRetry<T>(
+	fn: (attempt: number) => Promise<T>,
+	opts: { attempts?: number | string; delay?: number | string; label?: string }
+): Promise<T> {
+	const attempts = Math.max(1, Math.min(Number(opts.attempts) || 3, 10));
+	const delay = Math.max(0, Number(opts.delay) || 1500);
+	let lastErr: unknown = null;
+	for (let attempt = 1; attempt <= attempts; attempt++) {
+		try {
+			return await fn(attempt);
+		} catch (e) {
+			lastErr = e;
+			if (attempt >= attempts) {
+				if (attempts > 1 && e instanceof Error) {
+					throw new Error(`${e.message} (после ${attempts} попыток)`);
+				}
+				throw e;
+			}
+			console.warn(
+				`${opts.label ?? 'Повтор'}: ${e instanceof Error ? e.message : String(e)}, попытка ${attempt + 1}/${attempts}`
+			);
+			await new Promise((r) => setTimeout(r, delay * attempt));
+		}
+	}
+	throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
+
 // Значение константы: универсальное поле хранит { t, v } — отдаём v
 function unwrapUniversal(v: unknown): unknown {
 	if (v && typeof v === 'object' && typeof (v as any).t === 'string') return (v as any).v;
@@ -239,10 +271,25 @@ async function elementApi({
 	if (!service) throw new Error('Узел «Запрос API»: сервис не найден');
 	const ctx = subContext(input, scenarioParams);
 	const resolved = substitute(params, ctx);
-	const res = await apiCall(service, resolved);
-	if (!res.ok) {
-		throw new Error(`Узел «Запрос API»: HTTP ${res.status}: ${String(res.raw).slice(0, 300)}`);
-	}
+	// Параметры ретрая из узла (данные): retry и retryDelay НЕ передаются в сам
+	// запрос. По умолчанию повторов нет — повтор неидемпотентного вызова небезопасен.
+	const retry = Number(resolved.retry);
+	const retryDelay = Number(resolved.retryDelay);
+	const { retry: _retry, retryDelay: _retryDelay, ...callParams } = resolved;
+	const res = await withRetry(
+		async () => {
+			const r = await apiCall(service, callParams);
+			if (!r.ok) throw new Error(`HTTP ${r.status}: ${String(r.raw).slice(0, 300)}`);
+			return r;
+		},
+		{
+			attempts: retry > 0 ? retry : 1,
+			delay: retryDelay > 0 ? retryDelay : 1500,
+			label: 'Узел «Запрос API»'
+		}
+	).catch((e: any) => {
+		throw new Error(`Узел «Запрос API»: ${e?.message ?? String(e)}`);
+	});
 	return res.data ?? res.raw;
 }
 
@@ -549,14 +596,23 @@ async function elementAgent({
 	if (p.temperature != null) body.temperature = Number(p.temperature);
 	if (p.max_tokens != null) body.max_tokens = Number(p.max_tokens);
 
-	const res = await apiCall(svc, {}, body);
-	if (!res.ok) {
-		throw new Error(`Узел «ИИ-агент»: HTTP ${res.status}: ${String(res.raw).slice(0, 300)}`);
-	}
-	const answer = res.data?.choices?.[0]?.message?.content;
-	if (answer == null) {
-		throw new Error('Узел «ИИ-агент»: пустой ответ модели');
-	}
+	// Ретрай при сбое HTTP или пустом ответе модели (некоторые провайдеры
+	// периодически отдают пустой content). Механика — универсальный withRetry;
+	// число попыток/пауза переопределяются параметрами узла retry / retryDelay.
+	const attempts = Number(p.retry) > 0 ? Number(p.retry) : 3;
+	const delay = Number(p.retryDelay) > 0 ? Number(p.retryDelay) : 1500;
+	const answer = await withRetry(
+		async () => {
+			const res = await apiCall(svc, {}, body);
+			if (!res.ok) throw new Error(`HTTP ${res.status}: ${String(res.raw).slice(0, 300)}`);
+			const text = res.data?.choices?.[0]?.message?.content;
+			if (text == null || String(text).trim() === '') throw new Error('пустой ответ модели');
+			return text;
+		},
+		{ attempts, delay, label: 'Узел «ИИ-агент»' }
+	).catch((e: any) => {
+		throw new Error(`Узел «ИИ-агент»: ${e?.message ?? String(e)}`);
+	});
 	return answer;
 }
 

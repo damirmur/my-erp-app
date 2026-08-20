@@ -119,7 +119,17 @@ async function executeNode(
 	const input = inputs.flow ?? inputs.input ?? undefined;
 
 	// Элемент из каталога (constant/get/api/template/find/create/run/agent)
-	const ELEMENT_TYPES = ['constant', 'get', 'api', 'template', 'find', 'create', 'run', 'agent'];
+	const ELEMENT_TYPES = [
+		'constant',
+		'get',
+		'api',
+		'template',
+		'find',
+		'create',
+		'run',
+		'agent',
+		'condition'
+	];
 	if (ELEMENT_TYPES.includes(type)) {
 		// Эффективный узел: элемент-дефолты слиты в data, чтобы реализации элементов
 		// (elementApi читает node.data.service, elementConstant — params и т.д.)

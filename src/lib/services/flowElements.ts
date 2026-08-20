@@ -4,7 +4,8 @@ import type { ApiCallResult } from '$lib/services/actionRunner';
 
 // Каталог элементов сценария (аналог узлов n8n). Каждый элемент — готовый
 // «преобразователь»: постоянная, извлечение из JSON, запрос API, шаблон текста,
-// поиск записи, создание записи, запуск действия другой таблицы. Узел сценария
+// поиск записи, создание записи, запуск действия другой таблицы (в т.ч. по
+// массиву записей), условие (булев флаг для ветвления данными). Узел сценария
 // выбирает элемент колонкой node_type и настраивает его полем params (jsonb).
 //
 // Подстановки ${путь}: в параметрах узла можно ссылаться на результат
@@ -43,7 +44,13 @@ export const FLOW_ELEMENTS: FlowElementDef[] = [
 		type: 'run',
 		label: 'Выполнить действие',
 		icon: '🏃',
-		hint: '{ "table": "…", "record": "${id}" }'
+		hint: '{ "table": "…", "record": "${id}" } либо { "records": [иды] }'
+	},
+	{
+		type: 'condition',
+		label: 'Условие',
+		icon: '🚦',
+		hint: '{ "if": "${include_finance}", "equals"?: …, "notEmpty"?: true }'
 	},
 	{ type: 'code', label: 'Код', icon: '🧩', hint: 'Произвольный JS (колонка «Код узла»)' },
 	{
@@ -516,9 +523,48 @@ async function elementRun({
 	const ctx = subContext(input, scenarioParams);
 	const p = substitute(params, ctx);
 	const tableName = String(p.table ?? '');
+	if (!tableName) throw new Error('Узел «Выполнить действие»: укажите table');
+	// Цикл по массиву записей: удобно, когда предыдущий узел создал несколько
+	// документов (например, «Сообщения»), а здесь надо запустить действие по каждому.
+	// Результаты возвращаются массивом в том же порядке; пустой массив — пустой результат.
+	if (Array.isArray(p.records)) {
+		if (p.records.length === 0) return [];
+		const out: unknown[] = [];
+		for (const id of p.records) {
+			out.push(await runAnotherTable(tableName, String(id)));
+		}
+		return out;
+	}
 	const recordId = String(p.record ?? '');
-	if (!tableName || !recordId) throw new Error('Узел «Выполнить действие»: укажите table и record');
+	if (!recordId) throw new Error('Узел «Выполнить действие»: укажите record или records');
 	return await runAnotherTable(tableName, recordId);
+}
+
+// Элемент «Условие»: проверяет значение и возвращает строгий boolean. Это
+// универсальный примитив ветвления — флаги (include_*) живут в данных (params
+// сценария/узла), а не в коде. Параметры:
+//   if       — путь со ${...} подстановками (проверяемое значение); если не задан,
+//              проверяется вход узла (${input});
+//   equals   — опционально: результат — равен ли разобранный if заданному значению;
+//   notEmpty — опционально: пустые значения (null/undefined/'') считать false.
+// Результат попадает в контекст по имени узла, потребители читают его через
+// ${название_узла} или ключ параметра (в `params` кода-узла).
+async function elementCondition({
+	input,
+	params,
+	scenarioParams
+}: FlowElementInput): Promise<unknown> {
+	const ctx = subContext(input, scenarioParams);
+	const p = substitute(params, ctx);
+	let val: unknown = p.if;
+	if (val === undefined) val = input;
+	if (p.notEmpty === true) {
+		return val !== undefined && val !== null && val !== '';
+	}
+	if (p.equals !== undefined) {
+		return val !== null && val !== undefined && String(val) === String(p.equals);
+	}
+	return Boolean(val);
 }
 
 // Резолв модели: id строки ТЧ каталога «Модели» (providers_llm → models, поле data.id
@@ -634,6 +680,8 @@ export async function runFlowElement(type: string, e: FlowElementInput): Promise
 			return elementCreate(e);
 		case 'run':
 			return elementRun(e);
+		case 'condition':
+			return elementCondition(e);
 		case 'agent':
 			return elementAgent(e);
 		default: {
